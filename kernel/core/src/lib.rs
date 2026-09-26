@@ -58,6 +58,9 @@ pub mod security;
 mod syscall;
 mod thread;
 mod time;
+
+/// Spawns a kernel thread that runs the given function.
+pub use crate::thread::spawn_kernel_thread;
 pub mod util;
 // TODO: Add vDSO support for LoongArch.
 #[cfg(not(target_arch = "loongarch64"))]
