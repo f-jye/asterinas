@@ -15,9 +15,9 @@ use crate::{
     net::socket::{
         netlink::NETLINK_DEFAULT_BUF_SIZE,
         options::{
-            AcceptConn, Broadcast, KeepAlive, Linger, PassCred, PeerCred, PeerGroups, Priority,
-            RecvBuf, RecvBufForce, RecvTimeout, ReuseAddr, ReusePort, SendBuf, SendBufForce,
-            SendTimeout, SocketOption, SocketType,
+            AcceptConn, AttachFilter, Broadcast, DetachFilter, KeepAlive, Linger, PassCred,
+            PeerCred, PeerGroups, Priority, RecvBuf, RecvBufForce, RecvTimeout, ReuseAddr,
+            ReusePort, SendBuf, SendBufForce, SendTimeout, SocketOption, SocketType,
             macros::{sock_option_mut, sock_option_ref},
         },
         unix::{CUserCred, UNIX_DATAGRAM_DEFAULT_BUF_SIZE, UNIX_STREAM_DEFAULT_BUF_SIZE},
@@ -273,6 +273,16 @@ impl SocketOptionSet {
                 } else {
                     self.set_recv_buf(*recv_buf);
                 }
+            }
+            // The classic-BPF receive filter is accepted but not enforced:
+            // every message that the kernel would deliver still reaches the
+            // socket. Clients like libudev only use the filter to discard
+            // messages that are irrelevant anyway.
+            socket_attach_filter @ AttachFilter => {
+                let _len = socket_attach_filter.get().unwrap();
+            }
+            socket_detach_filter @ DetachFilter => {
+                let _ = socket_detach_filter.get().unwrap();
             }
             _ => return_errno_with_message!(
                 Errno::ENOPROTOOPT,
