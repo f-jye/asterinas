@@ -97,7 +97,7 @@ pub(super) struct Uevent {
 
 impl Uevent {
     /// Creates a new uevent.
-    fn new(
+    pub(super) fn new(
         action: SysObjAction,
         devpath: String,
         subsystem: String,

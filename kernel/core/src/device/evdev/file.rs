@@ -309,14 +309,20 @@ pub(super) fn is_syn_dropped_event(event: &EvdevEvent) -> bool {
     event.type_ == EventTypes::SYN.as_index() && event.code == SynEvent::Dropped as u16
 }
 
-fn write_bytes_and_zeros_to_userspace(writer: &mut VmWriter, bytes: &[u8]) -> Result<()> {
+fn write_bytes_and_zeros_to_userspace(writer: &mut VmWriter, bytes: &[u8]) -> Result<usize> {
+    let total = writer.avail();
     let mut reader = VmReader::from(bytes);
     writer.write_fallible(&mut reader)?;
     writer.fill_zeros(writer.avail())?;
-    Ok(())
+    Ok(total)
 }
 
-fn handle_get_bit(evdev: &Arc<EvdevDevice>, event_type: u8, writer: &mut VmWriter) -> Result<()> {
+fn handle_get_bit(
+    evdev: &Arc<EvdevDevice>,
+    event_type: u8,
+    writer: &mut VmWriter,
+) -> Result<usize> {
+    let total = writer.avail();
     let capability = evdev.device.capability();
 
     match event_type as u16 {
@@ -349,7 +355,7 @@ fn handle_get_bit(evdev: &Arc<EvdevDevice>, event_type: u8, writer: &mut VmWrite
             return_errno_with_message!(Errno::EINVAL, "the event type is not supported yet");
         }
     }
-    Ok(())
+    Ok(total)
 }
 
 impl Pollable for EvdevFile {
@@ -421,6 +427,12 @@ impl PerOpenFileOps for EvdevFile {
     fn ioctl(&self, _path: &Path, raw_ioctl: RawIoctl) -> Result<i32> {
         use ioctl_defs::*;
 
+        // For variable-size output ioctls (`_IOC_READ` with a size field),
+        // Linux returns the number of bytes copied to user space; callers
+        // such as libinput and the `input_id` builtin treat a smaller value
+        // as truncated data.
+        let mut copied_len: usize = 0;
+
         dispatch_ioctl!(match raw_ioctl {
             cmd @ GetDriverVer => {
                 const EVDEV_DRIVER_VERSION: i32 = 0x010001;
@@ -439,26 +451,27 @@ impl PerOpenFileOps for EvdevFile {
             }
             cmd @ GetDeviceName => {
                 let evdev = self.upgrade_device()?;
-                cmd.with_writer(|mut writer| {
+                copied_len = cmd.with_writer(|mut writer| {
                     write_bytes_and_zeros_to_userspace(&mut writer, evdev.device.name().as_bytes())
                 })?;
             }
             cmd @ GetDevicePhys => {
                 let evdev = self.upgrade_device()?;
-                cmd.with_writer(|mut writer| {
+                copied_len = cmd.with_writer(|mut writer| {
                     write_bytes_and_zeros_to_userspace(&mut writer, evdev.device.phys().as_bytes())
                 })?;
             }
             cmd @ GetDeviceUniq => {
                 let evdev = self.upgrade_device()?;
-                cmd.with_writer(|mut writer| {
+                copied_len = cmd.with_writer(|mut writer| {
                     write_bytes_and_zeros_to_userspace(&mut writer, evdev.device.uniq().as_bytes())
                 })?;
             }
             cmd @ GetEventBits => {
                 let evdev = self.upgrade_device()?;
                 let event_type = cmd.discriminant();
-                cmd.base_ioctl()
+                copied_len = cmd
+                    .base_ioctl()
                     .with_writer(|mut writer| handle_get_bit(&evdev, event_type, &mut writer))?;
             }
             cmd @ GetKeyState => {
@@ -468,23 +481,26 @@ impl PerOpenFileOps for EvdevFile {
                 // <https://elixir.bootlin.com/linux/v6.15/source/drivers/input/evdev.c#L872-L876>.
                 //
                 // Currently, no key state tracking is supported. So we report zeros as key states here.
-                cmd.with_writer(|mut writer| {
+                copied_len = cmd.with_writer(|mut writer| {
+                    let len = writer.avail();
                     writer.fill_zeros(writer.avail())?;
-                    Ok(())
+                    Ok(len)
                 })?;
             }
             cmd @ GetLedState => {
                 // No LED events are supported. So we can report zeros as LED states here.
-                cmd.with_writer(|mut writer| {
+                copied_len = cmd.with_writer(|mut writer| {
+                    let len = writer.avail();
                     writer.fill_zeros(writer.avail())?;
-                    Ok(())
+                    Ok(len)
                 })?;
             }
             cmd @ GetSwState => {
                 // No switch events are supported. So we can report zeros as switch states here.
-                cmd.with_writer(|mut writer| {
+                copied_len = cmd.with_writer(|mut writer| {
+                    let len = writer.avail();
                     writer.fill_zeros(writer.avail())?;
-                    Ok(())
+                    Ok(len)
                 })?;
             }
             _ => {
@@ -499,7 +515,7 @@ impl PerOpenFileOps for EvdevFile {
             }
         });
 
-        Ok(0)
+        Ok(copied_len as i32)
     }
 
     fn settable_status_flags(&self) -> SettableStatusFlags {

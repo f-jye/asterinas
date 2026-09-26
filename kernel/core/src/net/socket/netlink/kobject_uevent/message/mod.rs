@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 
-#![cfg_attr(not(ktest), expect(dead_code))]
+use core::str::FromStr as _;
 
-use uevent::Uevent;
+use uevent::{SysObjAction, Uevent};
 
 use crate::{
     net::socket::netlink::{
-        NetlinkSocketAddr, receiver::QueueableMessage, table::MulticastMessage,
+        NetlinkSocketAddr,
+        addr::GroupIdSet,
+        receiver::QueueableMessage,
+        table::{MulticastMessage, NetlinkUeventProtocol, SupportedNetlinkProtocol},
     },
     prelude::*,
     util::MultiWrite,
@@ -16,6 +19,24 @@ mod syn_uevent;
 #[cfg(ktest)]
 mod test;
 mod uevent;
+
+/// Broadcasts a device uevent to the group-1 listeners (`udevd`), as Linux's
+/// `kobject_uevent_env` does.
+///
+/// `action` is one of "add", "remove", "change", "bind" or "unbind"; `devpath`
+/// is the device path under sysfs with a leading `/`; `envs` carries the
+/// `KEY=VALUE` variables (e.g. `SUBSYSTEM`, `DEVNAME`, `MAJOR`, `MINOR`).
+pub fn broadcast_device_uevent(
+    action: &str,
+    devpath: &str,
+    subsystem: &str,
+    envs: Vec<(String, String)>,
+) -> Result<()> {
+    let sys_action = SysObjAction::from_str(action)?;
+    let uevent = Uevent::new(sys_action, devpath.to_string(), subsystem.to_string(), envs);
+    let message = UeventMessage::new(uevent, NetlinkSocketAddr::new(0, GroupIdSet::new(0x1)));
+    NetlinkUeventProtocol::multicast(GroupIdSet::new(0x1), message)
+}
 
 /// A uevent message.
 ///
