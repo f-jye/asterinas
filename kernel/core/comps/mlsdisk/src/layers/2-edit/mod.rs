@@ -5,7 +5,7 @@
 mod edits;
 mod journal;
 
-pub(crate) use self::{
+pub use self::{
     edits::{Edit, EditGroup},
     journal::{
         CompactPolicy, DefaultCompactPolicy, EditJournal, EditJournalMeta, NeverCompactPolicy,

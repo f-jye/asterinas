@@ -5,7 +5,7 @@
 use core::cell::{RefCell, RefMut};
 
 /// A mutex.
-pub(crate) struct Mutex<T>(RefCell<T>);
+pub struct Mutex<T>(RefCell<T>);
 
 // SAFETY: We're single-threaded.
 unsafe impl<T: Send> Send for Mutex<T> {}
@@ -16,12 +16,12 @@ type MutexGuard<'a, T> = RefMut<'a, T>;
 
 impl<T> Mutex<T> {
     /// Creates a new mutex.
-    pub(crate) const fn new(data: T) -> Self {
+    pub const fn new(data: T) -> Self {
         Self(RefCell::new(data))
     }
 
     /// Locks the mutex.
-    pub(crate) fn lock(&self) -> MutexGuard<'_, T> {
+    pub fn lock(&self) -> MutexGuard<'_, T> {
         self.0.borrow_mut()
     }
 }

@@ -61,7 +61,6 @@ impl DrmMinor {
         self.registered_device.device()
     }
 
-    /// Returns the DRM-core state shared by all minors of this device.
     pub(super) fn registered_device(&self) -> &Arc<RegisteredDrmDevice> {
         &self.registered_device
     }
@@ -147,7 +146,7 @@ impl Device for DrmMinor {
 /// Primary nodes provide display-management and authenticated legacy
 /// operations, while render nodes provide unprivileged rendering access.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum DrmMinorType {
+pub enum DrmMinorType {
     Primary,
     Render,
 }

@@ -48,7 +48,7 @@ pub trait Aead {
 }
 
 /// Symmetric key cipher algorithm.
-pub(crate) trait Skcipher {
+pub trait Skcipher {
     type Key: Deref<Target = [u8]> + RandomInit;
     type Iv: Deref<Target = [u8]> + RandomInit;
 

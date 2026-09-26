@@ -159,7 +159,7 @@ impl NetworkDeviceIrqCallbackSet {
 }
 
 impl Component {
-    fn init() -> Result<Self, ComponentInitError> {
+    pub fn init() -> Result<Self, ComponentInitError> {
         Ok(Self {
             network_device_table: SpinLock::new(BTreeMap::new()),
         })

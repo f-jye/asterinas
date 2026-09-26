@@ -10,7 +10,7 @@ use crate::{
     packet::{ApplicationLayer, RxPacket, TransportLayer, TxPacket},
 };
 
-pub(in crate::iface) fn parse(
+pub fn parse(
     pkt: RxPacket<TransportLayer>,
     ip_repr: &IpRepr,
     csum: bool,
@@ -153,7 +153,7 @@ fn parse_options(mut options: VmReader<Infallible>, repr: &mut TcpRepr<'static>)
     true
 }
 
-pub(in crate::iface) fn emit(
+pub fn emit(
     mut pkt: TxPacket<ApplicationLayer>,
     ip_repr: &IpRepr,
     tcp_repr: &TcpRepr<'_>,

@@ -9,7 +9,7 @@ use crate::{
     packet::{NetworkLayer, RxPacket, TransportLayer, TxPacket},
 };
 
-pub(in crate::iface) fn parse(
+pub fn parse(
     pkt: RxPacket<NetworkLayer>,
     ver: Option<Version>,
     csum: bool,
@@ -97,11 +97,7 @@ fn do_parse_v6(
     Some((pkt.peel(size_of::<HeaderV6>()), repr))
 }
 
-pub(in crate::iface) fn emit(
-    pkt: TxPacket<TransportLayer>,
-    ip_repr: &IpRepr,
-    csum: bool,
-) -> TxPacket<NetworkLayer> {
+pub fn emit(pkt: TxPacket<TransportLayer>, ip_repr: &IpRepr, csum: bool) -> TxPacket<NetworkLayer> {
     match ip_repr {
         IpRepr::Ipv4(ipv4_repr) => emit_v4(pkt, ipv4_repr, csum),
         IpRepr::Ipv6(ipv6_repr) => emit_v6(pkt, ipv6_repr),
@@ -153,7 +149,7 @@ fn emit_v6(pkt: TxPacket<TransportLayer>, ipv6_repr: &Ipv6Repr) -> TxPacket<Netw
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::iface) struct IpReprWithLen {
+pub struct IpReprWithLen {
     pub inner: IpRepr,
     pub header_len: usize,
 }
@@ -179,7 +175,7 @@ struct VersionAndIhl(u8);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, TryFromInt)]
-pub(in crate::iface) enum Version {
+pub enum Version {
     V4 = 4,
     V6 = 6,
 }

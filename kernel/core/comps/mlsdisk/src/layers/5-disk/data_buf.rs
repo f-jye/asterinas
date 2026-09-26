@@ -24,7 +24,7 @@ pub(super) struct DataBlock([u8; BLOCK_SIZE]);
 
 impl DataBuf {
     /// Create a new empty data buffer with a given capacity.
-    pub(super) fn new(cap: usize) -> Self {
+    pub fn new(cap: usize) -> Self {
         Self {
             buf: Mutex::new(BTreeMap::new()),
             cap,
@@ -35,7 +35,7 @@ impl DataBuf {
 
     /// Get the buffered data block with the key and copy
     /// the content into `buf`.
-    pub(super) fn get(&self, key: RecordKey, buf: &mut BufMut) -> Option<()> {
+    pub fn get(&self, key: RecordKey, buf: &mut BufMut) -> Option<()> {
         debug_assert_eq!(buf.nblocks(), 1);
         if let Some(block) = self.buf.lock().get(&key) {
             buf.as_mut_slice().copy_from_slice(block.as_slice());
@@ -46,10 +46,7 @@ impl DataBuf {
     }
 
     /// Get the buffered data blocks which keys are within the given range.
-    pub(super) fn get_range(
-        &self,
-        range: RangeInclusive<RecordKey>,
-    ) -> Vec<(RecordKey, Arc<DataBlock>)> {
+    pub fn get_range(&self, range: RangeInclusive<RecordKey>) -> Vec<(RecordKey, Arc<DataBlock>)> {
         self.buf
             .lock()
             .iter()
@@ -65,7 +62,7 @@ impl DataBuf {
 
     /// Put the data block in `buf` into the buffer. Return
     /// whether the buffer is full after insertion.
-    pub(super) fn put(&self, key: RecordKey, buf: BufRef) -> bool {
+    pub fn put(&self, key: RecordKey, buf: BufRef) -> bool {
         debug_assert_eq!(buf.nblocks(), 1);
 
         let mut is_full = self.is_full.lock().unwrap();
@@ -84,22 +81,22 @@ impl DataBuf {
     }
 
     /// Return the number of data blocks of the buffer.
-    pub(super) fn nblocks(&self) -> usize {
+    pub fn nblocks(&self) -> usize {
         self.buf.lock().len()
     }
 
     /// Return whether the buffer is full.
-    pub(super) fn at_capacity(&self) -> bool {
+    pub fn at_capacity(&self) -> bool {
         self.nblocks() >= self.cap
     }
 
     /// Return whether the buffer is empty.
-    pub(super) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.nblocks() == 0
     }
 
     /// Empty the buffer.
-    pub(super) fn clear(&self) {
+    pub fn clear(&self) {
         let mut is_full = self.is_full.lock().unwrap();
         self.buf.lock().clear();
         if *is_full {
@@ -109,7 +106,7 @@ impl DataBuf {
     }
 
     /// Return all the buffered data blocks.
-    pub(super) fn all_blocks(&self) -> Vec<(RecordKey, Arc<DataBlock>)> {
+    pub fn all_blocks(&self) -> Vec<(RecordKey, Arc<DataBlock>)> {
         self.buf
             .lock()
             .iter()
@@ -120,13 +117,13 @@ impl DataBuf {
 
 impl DataBlock {
     /// Create a new data block from the given `buf`.
-    pub(super) fn from_buf(buf: BufRef) -> Arc<Self> {
+    pub fn from_buf(buf: BufRef) -> Arc<Self> {
         debug_assert_eq!(buf.nblocks(), 1);
         Arc::new(DataBlock(buf.as_slice().try_into().unwrap()))
     }
 
     /// Return the immutable slice of the data block.
-    pub(super) fn as_slice(&self) -> &[u8] {
+    pub fn as_slice(&self) -> &[u8] {
         &self.0
     }
 }

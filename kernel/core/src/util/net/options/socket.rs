@@ -80,6 +80,8 @@ pub(crate) fn new_socket_option(name: i32) -> Result<Box<dyn RawSocketOption>> {
         CSocketOptionName::SNDBUFFORCE => Ok(Box::new(SendBufForce::new())),
         CSocketOptionName::RCVBUFFORCE => Ok(Box::new(RecvBufForce::new())),
         CSocketOptionName::PEERGROUPS => Ok(Box::new(PeerGroups::new())),
+        CSocketOptionName::ATTACH_FILTER => Ok(Box::new(AttachFilter::new())),
+        CSocketOptionName::DETACH_FILTER => Ok(Box::new(DetachFilter::new())),
         _ => return_errno_with_message!(Errno::ENOPROTOOPT, "unsupported socket-level option"),
     }
 }
@@ -101,6 +103,14 @@ impl_raw_sock_option_get_only!(PeerCred);
 impl_raw_sock_option_get_only!(AcceptConn);
 impl_raw_socket_option!(SendBufForce);
 impl_raw_socket_option!(RecvBufForce);
+
+// SO_ATTACH_FILTER/SO_DETACH_FILTER install a classic-BPF filter on the
+// socket's receive path. The filter is accepted but not enforced: every
+// message that the kernel would deliver still reaches the socket. This is
+// enough for clients like libudev whose monitors only use the filter to
+// discard messages that are irrelevant anyway.
+impl_raw_sock_option_set_only!(AttachFilter);
+impl_raw_sock_option_set_only!(DetachFilter);
 
 // SO_PEERGROUPS is a read-only option. However, calling setsockopt on SO_PEERGROUPS will return EINVAL
 // instead of ENOPROTOOPT like other options. Therefore, we manually implement `RawSocketOption` for it.

@@ -28,7 +28,7 @@ use ostd::{
 use super::Driver;
 use crate::SystemTime;
 
-pub(super) struct RtcCmos {
+pub struct RtcCmos {
     access: SpinLock<CmosAccess>,
     status_b: StatusB,
 }
@@ -146,24 +146,24 @@ bitflags::bitflags! {
 }
 
 impl CmosAccess {
-    fn read_register(&mut self, reg: Register) -> u8 {
+    pub(self) fn read_register(&mut self, reg: Register) -> u8 {
         self.read_register_impl(reg as u8)
     }
 
-    fn read_century(&mut self) -> Option<u8> {
+    pub(self) fn read_century(&mut self) -> Option<u8> {
         self.century_register
             .map(|r| self.read_register_impl(r.get()))
     }
 
-    fn read_status_a(&mut self) -> StatusA {
+    pub(self) fn read_status_a(&mut self) -> StatusA {
         StatusA::from_bits_truncate(self.read_register_impl(Register::StatusA as u8))
     }
 
-    fn read_status_b(&mut self) -> StatusB {
+    pub(self) fn read_status_b(&mut self) -> StatusB {
         StatusB::from_bits_truncate(self.read_register_impl(Register::StatusB as u8))
     }
 
-    fn check_presence(&mut self) -> bool {
+    pub(self) fn check_presence(&mut self) -> bool {
         // If a working CMOS RTC is present, `VRT` should be set and all other reserved bits should
         // not be set.
         self.read_register_impl(Register::StatusD as u8) == StatusD::VRT.bits()
@@ -187,7 +187,7 @@ struct CmosData {
 }
 
 impl CmosData {
-    fn read_rtc(rtc: &RtcCmos) -> Self {
+    pub(self) fn read_rtc(rtc: &RtcCmos) -> Self {
         let mut access = rtc.access.lock();
 
         let mut now = Self::from_rtc_raw(&mut access);

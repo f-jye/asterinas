@@ -86,16 +86,7 @@ pub(super) trait Uart {
     fn flush(&self);
 }
 
-/// A trait that abstracts byte-wise UART device operations.
-pub(super) trait UartMut {
-    /// Sends one byte to UART.
-    fn send_byte(&mut self, byte: u8);
-
-    /// Receives one byte from UART.
-    fn recv_byte(&mut self) -> Option<u8>;
-}
-
-impl<T: UartMut> Uart for SpinLock<T, LocalIrqDisabled> {
+impl<A: Ns16550aAccess> Uart for SpinLock<Ns16550aUart<A>, LocalIrqDisabled> {
     fn send(&self, buf: &[u8]) {
         let mut uart = self.lock();
 
@@ -103,9 +94,9 @@ impl<T: UartMut> Uart for SpinLock<T, LocalIrqDisabled> {
             // TODO: This is termios-specific behavior and should be part of the TTY implementation
             // instead of the serial console implementation. See the ONLCR flag for more details.
             if *byte == b'\n' {
-                uart.send_byte(b'\r');
+                uart.send(b'\r');
             }
-            uart.send_byte(*byte);
+            uart.send(*byte);
         }
     }
 
@@ -113,7 +104,7 @@ impl<T: UartMut> Uart for SpinLock<T, LocalIrqDisabled> {
         let mut uart = self.lock();
 
         for (i, byte) in buf.iter_mut().enumerate() {
-            let Some(recv_byte) = uart.recv_byte() else {
+            let Some(recv_byte) = uart.recv() else {
                 return i;
             };
             *byte = recv_byte;
@@ -125,23 +116,13 @@ impl<T: UartMut> Uart for SpinLock<T, LocalIrqDisabled> {
     fn flush(&self) {
         let mut uart = self.lock();
 
-        while uart.recv_byte().is_some() {}
+        while uart.recv().is_some() {}
     }
 }
 
 #[inherit_methods(from = "(**self)")]
-impl<T: UartMut> Uart for &SpinLock<T, LocalIrqDisabled> {
+impl<A: Ns16550aAccess> Uart for &SpinLock<Ns16550aUart<A>, LocalIrqDisabled> {
     fn send(&self, buf: &[u8]);
     fn recv(&self, buf: &mut [u8]) -> usize;
     fn flush(&self);
-}
-
-impl<A: Ns16550aAccess> UartMut for Ns16550aUart<A> {
-    fn send_byte(&mut self, byte: u8) {
-        self.send(byte);
-    }
-
-    fn recv_byte(&mut self) -> Option<u8> {
-        self.recv()
-    }
 }

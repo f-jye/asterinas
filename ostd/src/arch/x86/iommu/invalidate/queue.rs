@@ -5,14 +5,14 @@ use crate::{
     prelude::*,
 };
 
-pub(in crate::arch::iommu) struct Queue {
+pub struct Queue {
     segment: Segment<()>,
     queue_size: usize,
     tail: usize,
 }
 
 impl Queue {
-    pub(in crate::arch::iommu) fn append_descriptor(&mut self, descriptor: u128) {
+    pub fn append_descriptor(&mut self, descriptor: u128) {
         if self.tail == self.queue_size {
             self.tail = 0;
         }
@@ -22,15 +22,15 @@ impl Queue {
         self.tail += 1;
     }
 
-    pub(in crate::arch::iommu) fn tail(&self) -> usize {
+    pub fn tail(&self) -> usize {
         self.tail
     }
 
-    pub(in crate::arch::iommu) fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         self.queue_size
     }
 
-    pub(in crate::arch::iommu) fn base_paddr(&self) -> Paddr {
+    pub(crate) fn base_paddr(&self) -> Paddr {
         self.segment.paddr()
     }
 

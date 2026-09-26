@@ -114,7 +114,7 @@ impl<E: Ext> RawTcpSocketExt<E> {
 
 define_boolean_value!(
     /// Whether the TCP connection became dead.
-    pub(crate) TcpConnBecameDead
+    TcpConnBecameDead
 );
 
 impl<E: Ext> RawTcpSocketExt<E> {

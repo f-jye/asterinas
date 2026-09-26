@@ -12,29 +12,38 @@ use ostd::{
     mm::io::util::HasVmReaderWriter,
     sync::{LocalIrqDisabled, SpinLock, WaitQueue},
 };
-use smallvec::SmallVec;
 
 use crate::device::filesystem::pool::FuseReplyBuf;
 
 /// Reply buffers owned by one submitted FUSE request.
 pub(super) struct ReplyBufs {
     header: Option<FuseReplyBuf>,
-    payload: SmallVec<[FuseReplyBuf; 1]>,
+    payload: Option<FuseReplyBuf>,
 }
 
 impl ReplyBufs {
-    /// Creates a reply-buffer set with an optional reply header.
-    pub(super) fn new(header: Option<FuseReplyBuf>) -> Self {
+    /// Creates an empty buffer set for a request that expects no reply.
+    pub(super) fn new_none() -> Self {
         Self {
-            header,
-            payload: SmallVec::new(),
+            header: None,
+            payload: None,
         }
     }
 
-    /// Adds a payload buffer after the reply header.
-    pub(super) fn push_payload(&mut self, payload: FuseReplyBuf) {
-        debug_assert!(self.header.is_some());
-        self.payload.push(payload);
+    /// Creates a buffer set for a reply that only contains a `ReplyHeader`.
+    pub(super) fn new_header_only(header: FuseReplyBuf) -> Self {
+        Self {
+            header: Some(header),
+            payload: None,
+        }
+    }
+
+    /// Creates a buffer set for a reply with a `ReplyHeader` and payload.
+    pub(super) fn new_with_payload(header: FuseReplyBuf, payload: FuseReplyBuf) -> Self {
+        Self {
+            header: Some(header),
+            payload: Some(payload),
+        }
     }
 
     /// Returns whether no reply buffer is expected.
@@ -42,43 +51,25 @@ impl ReplyBufs {
         self.header.is_none()
     }
 
-    /// Returns the FUSE reply header buffer.
-    pub(super) fn reply_header_buf(&self) -> Result<&FuseReplyBuf, FuseError> {
-        self.header.as_ref().ok_or(FuseError::MalformedResponse)
+    /// Returns the reply header buffer.
+    pub(super) fn header(&self) -> Option<&FuseReplyBuf> {
+        self.header.as_ref()
     }
 
-    /// Returns payload buffers in virtqueue descriptor order.
-    pub(super) fn payload_bufs(&self) -> &[FuseReplyBuf] {
-        &self.payload
+    /// Returns the reply payload buffer.
+    pub(super) fn payload(&self) -> Option<&FuseReplyBuf> {
+        self.payload.as_ref()
     }
 
     /// Returns the reply buffers in virtqueue descriptor order.
     pub(super) fn iter(&self) -> impl Iterator<Item = &FuseReplyBuf> {
         self.header.iter().chain(self.payload.iter())
     }
-
-    /// Returns the only payload buffer used by typed reply parsers.
-    ///
-    /// `FUSE_INIT`, `FUSE_WRITE`, and typed replies reached through
-    /// `FuseSession::do_fuse_op` use one payload buffer after the reply header.
-    /// A `FUSE_READ` reply may use several page buffers, but
-    /// [`FuseOperation::parse_reply`] is not a scatter-gather parser. Rejecting
-    /// more than one payload prevents it from silently parsing only the first
-    /// fragment.
-    fn single_payload(&self) -> Result<Option<&FuseReplyBuf>, FuseError> {
-        match self.payload_bufs() {
-            [] => Ok(None),
-            [payload] => Ok(Some(payload)),
-            [..] => Err(FuseError::MalformedResponse),
-        }
-    }
 }
 
 /// A waiter for one submitted FUSE request.
 #[must_use]
 pub struct FuseWaiter {
-    /// Reply buffers in virtqueue descriptor order. The first buffer is the
-    /// [`ReplyHeader`] whenever a reply is expected.
     reply_bufs: ReplyBufs,
     status: SpinLock<FuseStatus, LocalIrqDisabled>,
     wait_queue: WaitQueue,
@@ -94,15 +85,22 @@ impl FuseWaiter {
         }
     }
 
+    fn reply_header_buf(&self) -> Result<&FuseReplyBuf, FuseError> {
+        let Some(header_buf) = self.reply_bufs.header() else {
+            return Err(FuseError::MalformedResponse);
+        };
+        Ok(header_buf)
+    }
+
     /// Parses a typed FUSE operation reply from the payload bytes.
     pub(super) fn parse_reply<Op: FuseOperation>(
         &self,
         payload_len: usize,
     ) -> Result<Op::Output, FuseError> {
-        let mut reader = if let Some(payload_buf) = self.reply_bufs.single_payload()? {
+        let mut reader = if let Some(payload_buf) = self.reply_bufs.payload() {
             payload_buf.reader().unwrap()
         } else {
-            let header_buf = self.reply_bufs.reply_header_buf()?;
+            let header_buf = self.reply_header_buf()?;
             let mut reader = header_buf.reader().unwrap();
             reader.skip(size_of::<ReplyHeader>());
             reader
@@ -156,10 +154,8 @@ impl FuseWaiter {
 
 impl IoCompletion for FuseWaiter {
     fn wait(&self) -> Result<(), IoError> {
-        // TODO: Preserve the number of bytes accepted by a short write for
-        // callers that need partial-write semantics.
         match self.wait() {
-            FuseCompletion::Complete(_) | FuseCompletion::ShortWrite { .. } => Ok(()),
+            FuseCompletion::Complete(_) => Ok(()),
             FuseCompletion::MalformedResponse | FuseCompletion::RemoteError(_) => {
                 Err(IoError::Failed)
             }

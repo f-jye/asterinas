@@ -7,9 +7,7 @@ use crate::{
     packet::{LinkLayer, NetworkLayer, RxPacket, TxPacket},
 };
 
-pub(in crate::iface) fn parse(
-    pkt: RxPacket<LinkLayer>,
-) -> Option<(RxPacket<NetworkLayer>, EthernetRepr)> {
+pub fn parse(pkt: RxPacket<LinkLayer>) -> Option<(RxPacket<NetworkLayer>, EthernetRepr)> {
     let header = pkt.reader().read_val::<Header>().ok()?;
 
     let repr = EthernetRepr {
@@ -20,10 +18,7 @@ pub(in crate::iface) fn parse(
     Some((pkt.peel(size_of::<Header>()), repr))
 }
 
-pub(in crate::iface) fn emit(
-    pkt: TxPacket<NetworkLayer>,
-    ethernet_repr: &EthernetRepr,
-) -> TxPacket<LinkLayer> {
+pub fn emit(pkt: TxPacket<NetworkLayer>, ethernet_repr: &EthernetRepr) -> TxPacket<LinkLayer> {
     let header = Header {
         dst: ethernet_repr.dst_addr.0,
         src: ethernet_repr.src_addr.0,

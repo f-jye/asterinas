@@ -11,7 +11,7 @@ use syn::{
 
 use super::require_item::RequireItem;
 
-pub(super) struct RequireAttr {
+pub struct RequireAttr {
     type_set: Type,
     required_types: Punctuated<Ident, Token![|]>,
 }
@@ -65,7 +65,7 @@ impl Fold for RequireAttr {
     }
 }
 
-pub(super) fn expand_require(item: RequireItem, mut require_attr: RequireAttr) -> TokenStream {
+pub fn expand_require(item: RequireItem, mut require_attr: RequireAttr) -> TokenStream {
     match item {
         RequireItem::Impl(item_impl) => {
             let new_item_impl = require_attr.fold_item_impl(item_impl);

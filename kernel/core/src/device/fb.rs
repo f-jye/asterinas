@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use aster_device::AnyDevice;
+use aster_device::UeventVars;
 use aster_framebuffer::{
     framebuffer::{ColorMapEntry, FRAMEBUFFER, FrameBuffer, MAX_CMAP_SIZE},
     pixel::PixelFormat,
@@ -16,13 +17,12 @@ use crate::{
     events::IoEvents,
     fs::{
         devtmpfs::DevtmpfsNodeMeta,
-        file::{Mappable, MappableObject, MappedObject, PerOpenFileOps, StatusFlags},
+        file::{Mappable, PerOpenFileOps, StatusFlags},
         vfs::{inode::FileOps, path::Path},
     },
     prelude::*,
     process::signal::{PollHandle, Pollable},
     util::ioctl::RawIoctl,
-    vm::vmar::{FileMmapRequest, MapHandle},
 };
 
 #[derive(Debug)]
@@ -225,24 +225,9 @@ mod ioctl_defs {
     pub(super) type Blank            = ioc!(FBIOBLANK,           0x4611, NoData);
 }
 
-impl Device for Fb {
-    fn type_(&self) -> DeviceType {
-        DeviceType::Char
-    }
-
-    fn id(&self) -> DeviceId {
-        // Same value with Linux: major 29, minor 0
-        DeviceId::new(MajorId::new(29), MinorId::new(0))
-    }
-
-    fn devtmpfs_meta(&self) -> Option<DevtmpfsNodeMeta> {
-        // The device model creates the /dev/fb0 node together with the sysfs
-        // topology (see `init_graphics_sysfs`); registering a second node here
-        // would duplicate it.
-        None
-    }
-
-    fn open(&self) -> Result<Box<dyn PerOpenFileOps>> {
+impl Fb {
+    /// Opens the framebuffer and returns its file handle.
+    fn new_handle(&self) -> Result<Box<dyn PerOpenFileOps>> {
         let Some(framebuffer) = FRAMEBUFFER.get() else {
             return Err(Error::with_message(
                 Errno::ENODEV,
@@ -301,6 +286,12 @@ impl aster_device::Bus for PlatformBus {
     fn matches(&self, _: &(), _: &()) -> bool {
         // No drivers bind on this bus; the framebuffer device is a leaf.
         false
+    }
+
+    fn uevent(&self, dev: &aster_device::BusDevice<Self>, vars: &mut UeventVars) {
+        // Linux's `platform_uevent` always reports the modalias, which
+        // libdrm's device discovery reads back (`MODALIAS=platform:<name>`).
+        vars.add("MODALIAS", format_args!("platform:{}", dev.base().name()));
     }
 }
 
@@ -555,8 +546,9 @@ impl PerOpenFileOps for FbHandle {
         true
     }
 
-    fn mappable(&self, _request: FileMmapRequest) -> Result<MappableObject<'_>> {
-        Ok(MappableObject::Device(self as &dyn Mappable))
+    fn mappable(&self) -> Result<Mappable> {
+        let iomem = self.framebuffer.io_mem();
+        Ok(Mappable::IoMem(iomem.clone()))
     }
 
     fn ioctl(&self, _path: &Path, raw_ioctl: RawIoctl) -> Result<i32> {
@@ -605,33 +597,7 @@ impl PerOpenFileOps for FbHandle {
     }
 }
 
-impl Mappable for FbHandle {
-    fn map(&self, offset: usize, mut handle: MapHandle) -> Result<Box<dyn MappedObject>> {
-        let io_mem = self.framebuffer.io_mem();
-        let mapped_handle = Box::new(FbMapHandle);
-
-        let io_mem_sliced = if offset >= io_mem.size() {
-            return Ok(mapped_handle);
-        } else if offset != 0 {
-            io_mem.slice(offset..io_mem.size())
-        } else {
-            io_mem.clone()
-        };
-
-        handle.map_iomem(0, io_mem_sliced);
-
-        Ok(mapped_handle)
-    }
-}
-
-#[derive(Debug)]
-struct FbMapHandle;
-
-impl MappedObject for FbMapHandle {
-    fn dup_at_offset(&self, _offset: usize) -> Box<dyn MappedObject> {
-        Box::new(Self)
-    }
-}
+static FRAMEBUFFER_PLATFORM_DEVICE: Once<Arc<dyn AnyDevice>> = Once::new();
 
 pub(super) fn init_in_first_kthread() {
     use aster_device::{BusDevice, BusHandle, ClassDevice, DevNum};
@@ -644,46 +610,44 @@ pub(super) fn init_in_first_kthread() {
         return;
     }
 
-    // The device model publishes the sysfs topology (/sys/class/graphics/fb0,
-    // the subsystem links, and /sys/dev/char/29:0) and creates the /dev/fb0
-    // node itself, so the char registry only wires `open` to the device.
-    // Without the topology, Xorg's fbdev driver refuses to claim the device.
-    init_graphics_sysfs();
+    // The framebuffer hangs off a firmware-provided platform device, as
+    // Linux's `simple-framebuffer` does. The `device` link this parent gives
+    // the fb device (through which `subsystem` resolves to `platform`) is
+    // what user space (e.g. Xorg's fbdevhw) expects to find.
+    let bus = PLATFORM_BUS.call_once(|| {
+        aster_device::register_bus(PlatformBus)
+            .expect("the `platform` bus must not be registered twice")
+    });
+    let platform_device = PLATFORM_DEVICE.call_once(|| {
+        let device = BusDevice::builder(bus, "simple-framebuffer.0", ()).build();
+        aster_device::add(&device).expect("failed to add the simple-framebuffer platform device");
+        device
+    });
+    // Other components (the DRM subsystem) hang their devices off the same
+    // firmware platform device, mirroring Linux's simpledrm.
+    FRAMEBUFFER_PLATFORM_DEVICE.call_once(|| platform_device.clone() as Arc<dyn AnyDevice>);
 
-    char::register(Arc::new(Fb)).expect("failed to register framebuffer char device");
-}
-
-/// The `graphics` class: framebuffer devices exposed as `/dev/fbN`.
-struct GraphicsClass;
-
-impl aster_device::Class for GraphicsClass {
-    const NAME: &'static str = "graphics";
-    type Device = Arc<Fb>;
-
-    fn devnode(
-        &self,
-        dev: &aster_device::ClassDevice<Self>,
-    ) -> Option<aster_device::DevNode> {
-        use aster_device::AnyDevice;
-        Some(aster_device::DevNode {
-            path: Some(aster_device::SysStr::from(dev.base().name().to_string())),
-            mode: None,
-        })
-    }
-}
-
-/// Places the framebuffer in the device model so that
-/// `/sys/class/graphics/fb0/device/subsystem` resolves, which is what Xorg's
-/// fbdev driver checks before it claims the device.
-fn init_graphics_sysfs() {
-    let fb_class = aster_device::register_class(GraphicsClass)
-        .expect("failed to register the graphics class");
-    let fb_dev = aster_device::ClassDevice::builder(&fb_class, "fb0", Arc::new(Fb))
-        .parent(super::platform::parent())
-        .devnum(aster_device::DevNum::char(DeviceId::new(
-            MajorId::new(29),
-            MinorId::new(0),
-        )))
+    let class = FB_CLASS.call_once(|| {
+        aster_device::register_class(GraphicsClass)
+            .expect("the `graphics` class must not be registered twice")
+    });
+    // Same value with Linux: major 29, minor 0
+    let id = DeviceId::new(MajorId::new(29), MinorId::new(0));
+    let device = ClassDevice::builder(class, "fb0", Fb)
+        .devnum(DevNum::char(id))
+        .parent(platform_device.clone())
         .build();
-    aster_device::add(&fb_dev).expect("failed to add the framebuffer device");
+
+    // The device model publishes sysfs topology (class dir, subsystem link,
+    // dev attribute, /sys/dev/char entry) and creates the /dev node itself,
+    // so the char registry only wires `open` to the device.
+    aster_device::add(&device).expect("failed to add the framebuffer device");
+    char::register(device).expect("failed to register framebuffer char device");
+}
+
+/// Returns the firmware platform device the boot framebuffer hangs off, for
+/// other subsystems (the DRM card) that sit on the same device, as Linux's
+/// simpledrm does. `None` before the framebuffer device is initialized.
+pub fn simple_framebuffer_platform_device() -> Option<Arc<dyn AnyDevice>> {
+    FRAMEBUFFER_PLATFORM_DEVICE.get().cloned()
 }

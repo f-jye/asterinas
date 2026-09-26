@@ -4,7 +4,7 @@ use alloc::str;
 
 use ostd::task::Task;
 
-use super::{Mount, MountTopology, Path};
+use super::{Mount, Path, mount::MountTopology};
 use crate::{
     fs::{
         file::{
@@ -15,10 +15,7 @@ use crate::{
         vfs::{inode::SymbolicLink, path::MountNamespace},
     },
     prelude::*,
-    process::{
-        credentials::capabilities::CapSet, pid_table::PidTable, posix_thread::AsPosixThread,
-    },
-    security::lsm::hooks as lsm_hooks,
+    process::{pid_table::PidTable, posix_thread::AsPosixThread},
 };
 
 /// The file descriptor of the current working directory.
@@ -163,35 +160,13 @@ impl PathResolver {
         &self.cwd
     }
 
-    /// Changes the current working directory to `path`.
-    pub(crate) fn chdir(&mut self, path: Path) -> Result<()> {
-        path.check_dir_search_permission()?;
-
-        self.set_cwd(path);
-        Ok(())
-    }
-
-    /// Changes the root directory to `path`.
-    pub(crate) fn chroot(&mut self, path: Path, ctx: &Context) -> Result<()> {
-        path.check_dir_search_permission()?;
-
-        lsm_hooks::on_capable(lsm_hooks::CapableContext::new(
-            ctx.thread_local.borrow_user_ns().as_ref(),
-            ctx.posix_thread,
-            CapSet::SYS_CHROOT,
-        ))?;
-
-        self.set_root(path);
-        Ok(())
-    }
-
     /// Sets the current working directory to the given `path`.
-    fn set_cwd(&mut self, path: Path) {
+    pub(crate) fn set_cwd(&mut self, path: Path) {
         self.cwd = path;
     }
 
     /// Sets the root directory to the given `path`.
-    fn set_root(&mut self, path: Path) {
+    pub(crate) fn set_root(&mut self, path: Path) {
         self.root = path;
     }
 
@@ -407,7 +382,7 @@ impl PathResolver {
         };
 
         self.root.mount.detach_from_parent(&mut topology_guard);
-        new_root_mount.graft_mount_tree(parent_path, &mut topology_guard);
+        new_root_mount.graft_mount_tree(&parent_path, &mut topology_guard);
         drop(topology_guard);
 
         let new_root = Path::new_root(new_root_mount);
@@ -438,6 +413,12 @@ impl PathResolver {
             );
         }
 
+        // TODO: Check the following once we support `MS_SHARED`:
+        // "The propagation type of the parent mount of `new_root` and the
+        // parent mount of the current root directory must not be
+        // `MS_SHARED`; similarly, if `put_old` is an existing mount point,
+        // its propagation type must not be `MS_SHARED`."
+
         let current_ns_proxy = ctx.thread_local.borrow_ns_proxy();
         let current_mnt_ns = current_ns_proxy.unwrap().mnt_ns();
         if !current_mnt_ns.owns(&new_root_path.mount) || !current_mnt_ns.owns(&put_old_path.mount) {
@@ -461,31 +442,13 @@ impl PathResolver {
                 "`new_root` or the current root is not a mount point"
             );
         }
-
-        let mut topology_guard = MountTopology::write_lock();
-
-        let Some(new_root_parent) = new_root_path
-            .mount
-            .parent()
-            .and_then(|parent| parent.upgrade())
-        else {
-            return_errno_with_message!(Errno::EINVAL, "`new_root` is on the rootfs mount");
-        };
-        let Some(current_root_parent) =
-            self.root.mount.parent().and_then(|parent| parent.upgrade())
-        else {
-            return_errno_with_message!(Errno::EINVAL, "the current root is on the rootfs mount");
-        };
-
-        if new_root_parent.is_shared()
-            || current_root_parent.is_shared()
-            || put_old_path.mount.is_shared()
-        {
+        if new_root_path.mount.parent().is_none() || self.root.mount.parent().is_none() {
             return_errno_with_message!(
                 Errno::EINVAL,
-                "`new_root` parent, current root parent, or `put_old` mount is shared"
+                "`new_root` or the current root is on the rootfs mount"
             );
         }
+        let mut topology_guard = MountTopology::write_lock();
 
         if !put_old_path.is_reachable_from(&new_root_path, &topology_guard) {
             return_errno_with_message!(
@@ -501,16 +464,17 @@ impl PathResolver {
         }
 
         let parent_path = {
+            let parent_mount = self.root.mount.parent().unwrap().upgrade().unwrap();
             let mountpoint = self.root.mount.mountpoint().unwrap();
-            Path::new(current_root_parent, mountpoint)
+            Path::new(parent_mount, mountpoint)
         };
 
         self.root
             .mount
-            .graft_mount_tree(put_old_path, &mut topology_guard);
+            .graft_mount_tree(&put_old_path, &mut topology_guard);
         new_root_path
             .mount
-            .graft_mount_tree(parent_path, &mut topology_guard);
+            .graft_mount_tree(&parent_path, &mut topology_guard);
 
         // Release the mount topology lock before taking other threads' resolver locks.
         drop(topology_guard);

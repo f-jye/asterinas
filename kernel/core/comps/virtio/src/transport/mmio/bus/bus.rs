@@ -2,8 +2,6 @@
 
 //! MMIO bus.
 
-#![short_vis_path::add(mmio)]
-
 use alloc::{collections::VecDeque, fmt::Debug, sync::Arc, vec::Vec};
 
 use ostd::{bus::BusProbeError, debug, error};
@@ -11,13 +9,13 @@ use ostd::{bus::BusProbeError, debug, error};
 use super::common_device::MmioCommonDevice;
 
 /// MMIO device trait
-pub(in mmio) trait MmioDevice: Sync + Send + Debug {
+pub trait MmioDevice: Sync + Send + Debug {
     /// Device ID
     fn device_id(&self) -> u32;
 }
 
 /// MMIO device driver.
-pub(in mmio) trait MmioDriver: Sync + Send + Debug {
+pub trait MmioDriver: Sync + Send + Debug {
     /// Probe an unclaimed mmio device.
     ///
     /// If the driver matches and succeeds in initializing the unclaimed device,
@@ -33,7 +31,7 @@ pub(in mmio) trait MmioDriver: Sync + Send + Debug {
 }
 
 /// MMIO bus
-pub(in mmio) struct MmioBus {
+pub struct MmioBus {
     common_devices: VecDeque<MmioCommonDevice>,
     devices: Vec<Arc<dyn MmioDevice>>,
     drivers: Vec<Arc<dyn MmioDriver>>,
@@ -41,7 +39,7 @@ pub(in mmio) struct MmioBus {
 
 impl MmioBus {
     /// Registers a MMIO driver to the MMIO bus.
-    pub(in mmio) fn register_driver(&mut self, driver: Arc<dyn MmioDriver>) {
+    pub fn register_driver(&mut self, driver: Arc<dyn MmioDriver>) {
         debug!("Register driver: {:#x?}", driver);
         let length = self.common_devices.len();
         for _ in (0..length).rev() {

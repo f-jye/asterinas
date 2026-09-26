@@ -101,15 +101,11 @@ impl<'rcu, C: PageTableConfig> Cursor<'rcu, C> {
     /// The cursor created will only be able to query or jump within the given
     /// range. Out-of-bound accesses will result in panics or errors as return values,
     /// depending on the access method.
-    /// See [`PageTable::cursor_mut_with_min_level`] for the requirements on `min_level`.
-    pub(in crate::mm) fn new(
+    pub fn new(
         pt: &'rcu PageTable<C>,
         guard: &'rcu dyn InAtomicMode,
         va: &Range<Vaddr>,
-        min_level: PagingLevel,
     ) -> Result<Self, PageTableError> {
-        assert!((1..=C::NR_LEVELS).contains(&min_level));
-
         if !is_valid_range::<C>(va) {
             return Err(PageTableError::InvalidVaddrRange(va.start, va.end));
         }
@@ -120,11 +116,11 @@ impl<'rcu, C: PageTableConfig> Cursor<'rcu, C> {
 
         const { assert!(C::NR_LEVELS as usize <= MAX_NR_LEVELS) };
 
-        Ok(locking::lock_range(pt, guard, va, min_level))
+        Ok(locking::lock_range(pt, guard, va))
     }
 
     /// Gets the current virtual address.
-    pub(in crate::mm) fn virt_addr(&self) -> Vaddr {
+    pub fn virt_addr(&self) -> Vaddr {
         self.va
     }
 
@@ -132,7 +128,7 @@ impl<'rcu, C: PageTableConfig> Cursor<'rcu, C> {
     ///
     /// If the cursor is pointing to a valid virtual address that is locked,
     /// it will return the virtual address range and the item at that slot.
-    pub(in crate::mm) fn query(&mut self) -> Result<PagesState<'rcu, C>, PageTableError> {
+    pub fn query(&mut self) -> Result<PagesState<'rcu, C>, PageTableError> {
         if self.va >= self.barrier_va.end {
             return Err(PageTableError::InvalidVaddr(self.va));
         }
@@ -170,7 +166,7 @@ impl<'rcu, C: PageTableConfig> Cursor<'rcu, C> {
     /// Panics if:
     ///  - the length is longer than the remaining range of the cursor;
     ///  - the length is not page-aligned.
-    pub(in crate::mm) fn find_next(&mut self, len: usize) -> Option<Vaddr> {
+    pub fn find_next(&mut self, len: usize) -> Option<Vaddr> {
         self.find_next_impl(len, false, false)
     }
 
@@ -265,7 +261,7 @@ impl<'rcu, C: PageTableConfig> Cursor<'rcu, C> {
     /// # Panics
     ///
     /// This method panics if the address has bad alignment.
-    pub(in crate::mm) fn jump(&mut self, va: Vaddr) -> Result<(), PageTableError> {
+    pub fn jump(&mut self, va: Vaddr) -> Result<(), PageTableError> {
         assert!(va.is_multiple_of(C::BASE_PAGE_SIZE));
         if !self.barrier_va.contains(&va) {
             return Err(PageTableError::InvalidVaddr(va));
@@ -350,7 +346,7 @@ impl<C: PageTableConfig> Drop for Cursor<'_, C> {
 /// The state of virtual pages represented by a page table.
 ///
 /// This is the return type of the [`Cursor::query`] method.
-pub(crate) type PagesState<'a, C> = (Range<Vaddr>, Option<<C as PageTableConfig>::ItemRef<'a>>);
+pub type PagesState<'a, C> = (Range<Vaddr>, Option<<C as PageTableConfig>::ItemRef<'a>>);
 
 /// The cursor of a page table that is capable of map, unmap or protect pages.
 ///
@@ -367,20 +363,18 @@ impl<'rcu, C: PageTableConfig> CursorMut<'rcu, C> {
     /// The cursor created will only be able to map, query or jump within the given
     /// range. Out-of-bound accesses will result in panics or errors as return values,
     /// depending on the access method.
-    /// See [`PageTable::cursor_mut_with_min_level`] for the requirements on `min_level`.
     pub(super) fn new(
         pt: &'rcu PageTable<C>,
         guard: &'rcu dyn InAtomicMode,
         va: &Range<Vaddr>,
-        min_level: PagingLevel,
     ) -> Result<Self, PageTableError> {
-        Cursor::new(pt, guard, va, min_level).map(|inner| Self(inner))
+        Cursor::new(pt, guard, va).map(|inner| Self(inner))
     }
 
     /// Moves the cursor forward to the next mapped virtual address.
     ///
     /// This is the same as [`Cursor::find_next`].
-    pub(in crate::mm) fn find_next(&mut self, len: usize) -> Option<Vaddr> {
+    pub fn find_next(&mut self, len: usize) -> Option<Vaddr> {
         self.0.find_next(len)
     }
 
@@ -391,12 +385,12 @@ impl<'rcu, C: PageTableConfig> CursorMut<'rcu, C> {
     /// # Panics
     ///
     /// This method panics if the address has bad alignment.
-    pub(in crate::mm) fn jump(&mut self, va: Vaddr) -> Result<(), PageTableError> {
+    pub fn jump(&mut self, va: Vaddr) -> Result<(), PageTableError> {
         self.0.jump(va)
     }
 
     /// Gets the current virtual address.
-    pub(in crate::mm) fn virt_addr(&self) -> Vaddr {
+    pub fn virt_addr(&self) -> Vaddr {
         self.0.virt_addr()
     }
 
@@ -404,7 +398,7 @@ impl<'rcu, C: PageTableConfig> CursorMut<'rcu, C> {
     ///
     /// If the cursor is pointing to a valid virtual address that is locked,
     /// it will return the virtual address range and the item at that slot.
-    pub(in crate::mm) fn query(&mut self) -> Result<PagesState<'rcu, C>, PageTableError> {
+    pub fn query(&mut self) -> Result<PagesState<'rcu, C>, PageTableError> {
         self.0.query()
     }
 
@@ -416,7 +410,6 @@ impl<'rcu, C: PageTableConfig> CursorMut<'rcu, C> {
     ///
     /// This function will panic if
     ///  - the virtual address range to be mapped is out of the locked range;
-    ///  - the item requires a higher level than the cursor has locked;
     ///  - the current virtual address is not aligned to the page size of the
     ///    item to be mapped;
     ///  - the virtual address range contains mappings that conflicts with the item.
@@ -426,12 +419,12 @@ impl<'rcu, C: PageTableConfig> CursorMut<'rcu, C> {
     /// The caller should ensure that
     ///  - the range being mapped does not affect kernel's memory safety;
     ///  - the physical address to be mapped is valid and safe to use.
-    pub(crate) unsafe fn map(&mut self, item: C::Item) {
+    pub unsafe fn map(&mut self, item: C::Item) {
         assert!(self.0.va < self.0.barrier_va.end);
 
         let (_, level, _) = C::item_raw_info(&item);
         assert!(
-            level <= C::HIGHEST_TRANSLATION_LEVEL && level <= self.0.guard_level,
+            level <= C::HIGHEST_TRANSLATION_LEVEL,
             "cursor level not suitable for mapping"
         );
         let size = page_size::<C>(level);
@@ -512,7 +505,7 @@ impl<'rcu, C: PageTableConfig> CursorMut<'rcu, C> {
     /// Panics if:
     ///  - the length is longer than the remaining range of the cursor;
     ///  - the length is not page-aligned.
-    pub(crate) unsafe fn take_next(&mut self, len: usize) -> Option<PageTableFrag<C>> {
+    pub unsafe fn take_next(&mut self, len: usize) -> Option<PageTableFrag<C>> {
         self.0.find_next_impl(len, true, true)?;
 
         let frag = self.replace_cur_entry(PteState::Absent);
@@ -548,7 +541,7 @@ impl<'rcu, C: PageTableConfig> CursorMut<'rcu, C> {
     /// Panics if:
     ///  - the length is longer than the remaining range of the cursor;
     ///  - the length is not page-aligned.
-    pub(in crate::mm) unsafe fn protect_next(
+    pub unsafe fn protect_next(
         &mut self,
         len: usize,
         op: &mut impl FnMut(&mut PageProperty),

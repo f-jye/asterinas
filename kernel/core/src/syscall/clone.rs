@@ -25,7 +25,18 @@ pub(super) fn sys_clone(
     let args = CloneArgs::for_clone(clone_flags, parent_tidptr, child_tidptr, tls, new_sp)?;
     debug!("clone args = {:x?}", args);
 
-    let child_pid = clone_child(ctx, parent_context, args)?;
+    // TODO: Remove this trace once the desktop bring-up is done.
+    let child_pid = match clone_child(ctx, parent_context, args) {
+        Ok(pid) => pid,
+        Err(err) => {
+            ostd::warn!(
+                "clone failed: flags={:#x} err={:?}",
+                clone_flags,
+                err.error()
+            );
+            return Err(err);
+        }
+    };
     Ok(SyscallReturn::Return(child_pid as _))
 }
 

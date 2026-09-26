@@ -20,12 +20,12 @@ use ostd::{
 };
 
 use super::{
-    MmapMode, PageFaultInfo, Rmap, RssType, Vmar, interval_set::Interval, util::is_intersected,
+    PageFaultInfo, Rmap, RssType, Vmar, interval_set::Interval, util::is_intersected,
     vmar_impls::RssDelta,
 };
 use crate::{
     fs::{
-        file::{FileLike, Mappable, MappedObject},
+        file::FileLike,
         vfs::{inode::Inode, path::PathResolver},
     },
     prelude::*,
@@ -75,11 +75,11 @@ pub(crate) struct VmMapping {
     /// If the mapping is VMO-backed, the `mapped_mem` field should be the page
     /// cache of the inode referenced by the file's path.
     file: Option<Arc<dyn FileLike>>,
-    /// The sharing mode of the mapping.
+    /// Whether the mapping is shared.
     ///
     /// The updates to a shared mapping are visible among processes, or carried
     /// through to the underlying file for file-backed shared mappings.
-    map_mode: MmapMode,
+    is_shared: bool,
     /// Whether the mapping needs to handle surrounding pages when handling
     /// page fault.
     handle_page_faults_around: bool,
@@ -96,7 +96,7 @@ impl Debug for VmMapping {
             .field("map_to_addr", &self.map_to_addr)
             .field("mapped_mem", &self.mapped_mem)
             .field("file", &self.file.as_ref().map(|file| file.path()))
-            .field("map_mode", &self.map_mode)
+            .field("is_shared", &self.is_shared)
             .field("handle_page_faults_around", &self.handle_page_faults_around)
             .field("perms", &self.perms)
             .finish()
@@ -117,7 +117,7 @@ impl VmMapping {
         map_to_addr: Vaddr,
         mapped_mem: MappedMemory,
         file: Option<Arc<dyn FileLike>>,
-        map_mode: MmapMode,
+        is_shared: bool,
         handle_page_faults_around: bool,
         perms: VmPerms,
     ) -> Self {
@@ -126,7 +126,7 @@ impl VmMapping {
             map_to_addr,
             mapped_mem,
             file,
-            map_mode,
+            is_shared,
             handle_page_faults_around,
             perms,
         }
@@ -190,7 +190,7 @@ impl VmMapping {
         }
     }
 
-    /// Returns a reference to the VMO for reverse mappings.
+    /// Returns a reference to the VMO for reserve mappings.
     ///
     /// This method will return `Some(_)` if this mapping is shared and
     /// VMO-backed.
@@ -202,12 +202,12 @@ impl VmMapping {
     // file content changes later on.
     pub(super) fn vmo_for_rmap(&self) -> Option<&Arc<Vmo>> {
         match &self.mapped_mem {
-            MappedMemory::Vmo(vmo) if self.map_mode.is_shared() => Some(vmo.vmo()),
+            MappedMemory::Vmo(vmo) if self.is_shared => Some(vmo.vmo()),
             _ => None,
         }
     }
 
-    /// Locks reverse mappings of [`Self::vmo_for_rmap`].
+    /// Locks reserve mappings of [`Self::vmo_for_rmap`].
     pub(super) fn lock_rmap(&self) -> Option<MutexGuard<'_, Rmap>> {
         self.vmo_for_rmap().map(|vmo| vmo.rmap().lock())
     }
@@ -222,7 +222,7 @@ impl VmMapping {
 
     /// Returns the shared futex backing identity for the address if available.
     pub(crate) fn futex_backing(&self, addr: Vaddr) -> Result<Option<(Weak<Vmo>, usize)>> {
-        if !self.map_mode.is_shared() {
+        if !self.is_shared {
             return Ok(None);
         }
 
@@ -327,7 +327,7 @@ impl VmMapping {
         } else {
             '-'
         };
-        let shared_char = if self.map_mode.is_shared() { 's' } else { 'p' };
+        let shared_char = if self.is_shared { 's' } else { 'p' };
         let offset = self.vmo().map(|vmo| vmo.offset).unwrap_or(0);
         let (dev_major, dev_minor) = self
             .inode()
@@ -366,7 +366,7 @@ impl VmMapping {
                 return Some(Cow::Borrowed("[heap]"));
             }
 
-            #[cfg(not(target_arch = "loongarch64"))]
+            #[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
             if let Some(vmo) = self.vmo() {
                 use crate::vdso::{VDSO_VMO_LAYOUT, vdso_vmo};
 
@@ -389,7 +389,7 @@ impl VmMapping {
             }
 
             // Reference: <https://github.com/google/gvisor/blob/38123b53da96ff6983fcc103dfe2a9cc4e0d80c8/test/syscalls/linux/proc.cc#L1158-L1172>
-            if matches!(&self.mapped_mem, MappedMemory::Vmo(_)) && self.map_mode.is_shared() {
+            if matches!(&self.mapped_mem, MappedMemory::Vmo(_)) && self.is_shared {
                 return Some(Cow::Borrowed("/dev/zero (deleted)"));
             }
 
@@ -412,7 +412,7 @@ impl VmMapping {
     ///
     /// Reference: <https://elixir.bootlin.com/linux/v6.16.5/source/include/linux/mm.h#L1470-L1473>
     fn is_cow(&self) -> bool {
-        !self.map_mode.is_shared() && self.perms.contains(VmPerms::MAY_WRITE)
+        !self.is_shared && self.perms.contains(VmPerms::MAY_WRITE)
     }
 }
 
@@ -454,16 +454,6 @@ impl VmMapping {
                     return Ok(());
                 }
             }
-
-            return res;
-        } else if let MappedMemory::Device(ref mapped_obj) = self.mapped_mem {
-            let handle = MapHandle {
-                vm_mapping: self,
-                vm_space,
-                rss_delta,
-            };
-
-            let res = mapped_obj.handle_page_fault(page_aligned_addr - self.map_to_addr(), handle);
 
             return res;
         }
@@ -533,7 +523,7 @@ impl VmMapping {
                     assert!(is_write);
 
                     // For shared mappings, ensure that the VMO allows the page to be written.
-                    if self.map_mode.is_shared()
+                    if self.is_shared
                         && let MappedMemory::Vmo(vmo) = &self.mapped_mem
                         && let Err(err) = vmo.get_committed_frame(
                             page_aligned_addr - self.map_to_addr,
@@ -554,7 +544,7 @@ impl VmMapping {
 
                     let new_flags = PageFlags::W | PageFlags::ACCESSED | PageFlags::DIRTY;
 
-                    if self.map_mode.is_shared() || only_reference {
+                    if self.is_shared || only_reference {
                         cursor.protect_next(PAGE_SIZE, |flags, _cache| {
                             *flags |= new_flags;
                         });
@@ -648,14 +638,14 @@ impl VmMapping {
         };
 
         let page_offset = page_aligned_addr - self.map_to_addr;
-        if !self.map_mode.is_shared() && page_offset >= vmo.valid_size() {
+        if !self.is_shared && page_offset >= vmo.valid_size() {
             // The page index is outside the VMO. This is only allowed in private mapping.
             return Ok((FrameAllocOptions::new().alloc_frame()?.into(), is_readonly));
         }
 
         let (page, mode) =
             vmo.get_committed_frame(page_offset, self.vmo_map_mode_from_is_write(is_write))?;
-        if !self.map_mode.is_shared() && is_write {
+        if !self.is_shared && is_write {
             // Write access to private VMO-backed mapping. Performs COW directly.
             Ok((duplicate_frame(&page.into())?.into(), is_readonly))
         } else {
@@ -663,13 +653,13 @@ impl VmMapping {
             // If read access to private VMO-backed mapping triggers a page fault,
             // the map should be readonly. If user next tries to write to the frame,
             // another page fault will be triggered which will performs a COW (Copy-On-Write).
-            is_readonly = !self.map_mode.is_shared() || mode != VmoMapMode::SharedWrite;
+            is_readonly = !self.is_shared || mode != VmoMapMode::SharedWrite;
             Ok((page.into(), is_readonly))
         }
     }
 
     fn vmo_map_mode_from_is_write(&self, is_write: bool) -> VmoMapMode {
-        if !self.map_mode.is_shared() {
+        if !self.is_shared {
             VmoMapMode::Private
         } else if !is_write {
             VmoMapMode::SharedRead
@@ -710,7 +700,7 @@ impl VmMapping {
         }
 
         let vm_perms = self.perms - VmPerms::WRITE;
-        let mode = if !self.map_mode.is_shared() {
+        let mode = if !self.is_shared {
             VmoMapMode::Private
         } else {
             VmoMapMode::SharedRead
@@ -891,21 +881,12 @@ impl VmMapping {
 
     /// Change the perms of the mapping.
     pub(super) fn protect(self, vm_space: &VmSpace, perms: VmPerms) -> Self {
-        // For device mappings, they're shared as we have checked that when
-        // creating the mapping. Additionally, we need to keep the page flags
-        // in sync with the mapping to avoid handling a write page fault on a
-        // read-only page, which is not yet supported.
-        //
-        // Otherwise, we should never convert a page to a writable page:
+        // We should never convert a page to a writable page directly.
         //  - For private mappings, we may need to perform Copy-On-Write (COW)
         //    before doing so.
         //  - For shared mappings, the page may need to be marked as a dirty
         //    page in the page cache.
-        let new_flags = if matches!(self.mapped_mem, MappedMemory::Device(_)) {
-            PageFlags::from(perms)
-        } else {
-            PageFlags::from(perms) - PageFlags::W
-        };
+        let new_flags = PageFlags::from(perms) - PageFlags::W;
 
         let preempt_guard = disable_preempt();
         let range = self.range();
@@ -974,7 +955,10 @@ impl MappedMemory {
         match self {
             MappedMemory::Anonymous => MappedMemory::Anonymous,
             MappedMemory::Vmo(vmo) => {
-                let new_offset = offset + vmo.offset();
+                let new_offset = vmo
+                    .offset()
+                    .checked_add(offset)
+                    .expect("mapped VMO offset should not overflow");
                 MappedMemory::Vmo(vmo.dup_at_offset(new_offset))
             }
             MappedMemory::Device => MappedMemory::Device,
@@ -1139,7 +1123,7 @@ impl Drop for MappedVmo {
 /// [`Vmar`]: crate::vm::vmar::Vmar
 fn try_merge(left: &VmMapping, right: &VmMapping) -> Option<VmMapping> {
     let is_adjacent = left.map_end() == right.map_to_addr();
-    let is_type_equal = left.map_mode == right.map_mode
+    let is_type_equal = left.is_shared == right.is_shared
         && left.handle_page_faults_around == right.handle_page_faults_around
         && left.perms == right.perms
         && match (&left.file, &right.file) {
@@ -1190,112 +1174,4 @@ fn duplicate_frame(src: &UFrame) -> Result<Frame<()>> {
     let new_frame = FrameAllocOptions::new().zeroed(false).alloc_frame()?;
     new_frame.writer().write(&mut src.reader());
     Ok(new_frame)
-}
-
-/**************************** Device mappings ********************************/
-
-/// The handle used in [`Mappable::map`].
-pub struct MapHandle<'a, 'b, 'c> {
-    vm_mapping: &'a VmMapping,
-    vm_space: &'a VmSpace,
-    rss_delta: &'c mut RssDelta<'b>,
-}
-
-impl MapHandle<'_, '_, '_> {
-    pub(super) const DEVICE_RSS_TYPE: RssType = RssType::File;
-
-    /// Returns the size of the target mapping in bytes.
-    pub(crate) fn size(&self) -> usize {
-        self.vm_mapping.map_size.get()
-    }
-
-    /// Maps a [`UFrame`].
-    ///
-    /// `offset` specifies the virtual address offset (from the start of the memory region).
-    #[expect(dead_code)]
-    pub(crate) fn map_frame(&mut self, offset: usize, frame: UFrame) {
-        let map_size = self.size();
-        if offset >= map_size {
-            return;
-        }
-
-        let map_addr = self.vm_mapping.map_to_addr + offset;
-        let map_len = PAGE_SIZE;
-        let map_range = map_addr..(map_addr + map_len);
-
-        let page_prop = PageProperty::new_user(
-            PageFlags::from(self.vm_mapping.perms),
-            CachePolicy::Writeback,
-        );
-
-        let preempt_guard = disable_preempt();
-        let mut cursor = self
-            .vm_space
-            .cursor_mut(&preempt_guard, &map_range)
-            .unwrap();
-        if cursor.query().unwrap().1.is_some() {
-            // We assume this is a race condition because the page fault has already been handled.
-            // Therefore, no action is required.
-            return;
-        }
-        cursor.map(frame, page_prop);
-        self.rss_delta.add(Self::DEVICE_RSS_TYPE, 1);
-    }
-
-    /// Maps an [`IoMem`].
-    ///
-    /// `offset` specifies the virtual address offset (from the start of the memory region).
-    pub(crate) fn map_iomem(&mut self, offset: usize, io_mem: IoMem) {
-        let map_size = self.size();
-        if offset >= map_size {
-            return;
-        }
-
-        let map_addr = self.vm_mapping.map_to_addr + offset;
-        let map_len = io_mem.size().min(map_size - offset);
-        let map_range = map_addr..(map_addr + map_len);
-
-        let page_prop = PageProperty::new_user(
-            PageFlags::from(self.vm_mapping.perms),
-            io_mem.cache_policy(),
-        );
-
-        let preempt_guard = disable_preempt();
-        let mut cursor = self
-            .vm_space
-            .cursor_mut(&preempt_guard, &map_range)
-            .unwrap();
-        if cursor.query().unwrap().1.is_some() {
-            // We assume this is a race condition because the page fault has already been handled.
-            // Therefore, no action is required.
-            return;
-        }
-        cursor.map_iomem(io_mem, page_prop, map_len, 0);
-    }
-}
-
-impl VmMapping {
-    /// Populates device memory for this mapping.
-    ///
-    /// This method should only be called for device memory mappings. It maps
-    /// the provided I/O memory region into the virtual address space.
-    pub(super) fn populate_device(
-        &mut self,
-        vm_space: &VmSpace,
-        mappable: &dyn Mappable,
-        vmo_offset: usize,
-        rss_delta: &mut RssDelta,
-    ) -> Result<()> {
-        debug_assert!(matches!(self.mapped_mem, MappedMemory::Anonymous));
-
-        let handle = MapHandle {
-            vm_mapping: self,
-            vm_space,
-            rss_delta,
-        };
-        let mapped_obj = mappable.map(vmo_offset, handle)?;
-
-        self.mapped_mem = MappedMemory::Device(mapped_obj);
-        Ok(())
-    }
 }

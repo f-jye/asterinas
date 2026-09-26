@@ -430,7 +430,7 @@ pub(crate) fn handle_user_signal(
         restorer_addr
     } else {
         cfg_select! {
-            any(target_arch = "riscv64", target_arch = "aarch64") => {
+            target_arch = "riscv64" => {
                 ctx.user_space().vmar().process_vm().vdso_base()
                     + crate::vdso::__VDSO_RT_SIGRETURN_OFFSET
             }

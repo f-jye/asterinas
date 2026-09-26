@@ -18,7 +18,7 @@ pub(crate) use file_attr::{
 };
 pub(crate) use file_common::FileCommon;
 pub(crate) use file_handle::{FileLike, StatusFlagsUpdate};
-pub use file_handle::{Mappable, MappableObject, MappedObject, SyncMode};
+pub use file_handle::{Mappable, SyncMode};
 pub(crate) use fs_config_file::{DetachedMountFile, FsConfigFile};
 pub use inode_attr::r#type::InodeType;
 pub(crate) use inode_attr::{
