@@ -722,3 +722,19 @@ mod test {
         );
     }
 }
+
+/// Writes a value into the current task's user space at `addr`.
+///
+/// Components that handle ioctls with pointer-to-array arguments need to
+/// access user memory beyond the fixed-size argument area; this is their
+/// public entry point.
+pub fn write_user_value<T: Pod>(addr: usize, val: &T) -> Result<()> {
+    use ostd::mm::VmIo;
+    current_userspace!().write_val(addr, val).map_err(Error::from)
+}
+
+/// Reads a value from the current task's user space at `addr`.
+pub fn read_user_value<T: Pod>(addr: usize) -> Result<T> {
+    use ostd::mm::VmIo;
+    current_userspace!().read_val(addr).map_err(Error::from)
+}
