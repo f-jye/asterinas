@@ -103,7 +103,12 @@ const DRM_PRIMARY_MINOR_BASE: u32 = 0;
 struct DrmClass;
 
 impl Class for DrmClass {
-    const NAME: &'static str = "drm";
+    // TODO: Name the class `drm` once GEM/PRIME support lands. Xorg's
+    // platform probe claims any `/sys/class/drm` device as a primary GPU and
+    // binds the modesetting driver to it, which currently aborts during DRI2
+    // extension initialization; naming the class differently keeps the fbdev
+    // X server working until then.
+    const NAME: &'static str = "aster-drm";
     type Device = Arc<DrmMinor>;
 
     fn devnode(&self, dev: &ClassDevice<Self>) -> Option<DevNode> {

@@ -238,14 +238,13 @@ impl CloneArgs {
             );
         }
 
-        // TODO: Support clone-family ptrace events and remove this check.
+        // TODO: Support clone-family ptrace events; for now the clone proceeds
+        // without the ptrace stop so that traced processes (e.g. Xorg) can
+        // still fork.
         if !clone_flags.contains(CloneFlags::CLONE_UNTRACED)
             && ctx.posix_thread.needs_ptrace_clone_stop(self)
         {
-            return_errno_with_message!(
-                Errno::EOPNOTSUPP,
-                "ptrace clone events are not supported currently"
-            );
+            ostd::warn!("clone-family ptrace events are not supported; cloning without the ptrace stop");
         }
 
         Ok(())
