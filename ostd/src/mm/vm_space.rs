@@ -72,6 +72,7 @@ pub struct VmSpace {
     pt: PageTable<UserPtConfig>,
     cpus: AtomicCpuSet,
     iomems: SpinLock<Vec<IoMem>>,
+    dmas: SpinLock<Vec<Arc<DmaCoherent>>>,
 }
 
 impl VmSpace {
@@ -81,6 +82,7 @@ impl VmSpace {
             pt: KERNEL_PAGE_TABLE.get().unwrap().create_user_page_table(),
             cpus: AtomicCpuSet::new(CpuSet::new_empty()),
             iomems: SpinLock::new(Vec::new()),
+            dmas: SpinLock::new(Vec::new()),
         }
     }
 
@@ -245,6 +247,23 @@ impl VmSpace {
             if paddr >= start && paddr < end {
                 let offset = paddr - start;
                 return Some((iomem.clone(), offset));
+            }
+        }
+        None
+    }
+
+    /// Finds the [`DmaCoherent`] allocation that contains the given physical address.
+    ///
+    /// It is a private method for internal use only. Please refer to
+    /// [`CursorMut::find_dma_by_paddr`] for more details.
+    fn find_dma_by_paddr(&self, paddr: Paddr) -> Option<(Arc<DmaCoherent>, usize)> {
+        let dmas = self.dmas.lock();
+        for dma in dmas.iter() {
+            let start = dma.paddr();
+            let end = start + dma.size();
+            if paddr >= start && paddr < end {
+                let offset = paddr - start;
+                return Some((dma.clone(), offset));
             }
         }
         None
@@ -440,16 +459,22 @@ impl<'a> CursorMut<'a> {
     ///
     /// # Limitations
     ///
-    /// The caller must keep the [`DmaCoherent`] alive as long as any mapping
-    /// created by this method exists, since the pages are mapped as untracked
-    /// I/O memory.
+    /// The pages are mapped as untracked I/O memory. The mapped allocation is
+    /// recorded in the [`VmSpace`], which keeps the [`DmaCoherent`] alive as
+    /// long as the address space exists.
     ///
     /// # Panics
     ///
     /// Panics if
     ///  - `len` or `offset` is not aligned to the page size;
     ///  - the current virtual address is already mapped.
-    pub fn map_dma(&mut self, dma: &DmaCoherent, prop: PageProperty, len: usize, offset: usize) {
+    pub fn map_dma(
+        &mut self,
+        dma: Arc<DmaCoherent>,
+        prop: PageProperty,
+        len: usize,
+        offset: usize,
+    ) {
         assert_eq!(len % PAGE_SIZE, 0);
         assert_eq!(offset % PAGE_SIZE, 0);
 
@@ -473,6 +498,18 @@ impl<'a> CursorMut<'a> {
                     .map(VmItem::new_untracked_io(current_paddr, prop))
             };
         }
+
+        // If the `dmas` list in `VmSpace` does not contain the current DMA
+        // allocation, push it to keep the allocation alive while it is mapped
+        // and to allow recovering it from a physical address (e.g., when
+        // forking).
+        let mut dmas = self.vmspace.dmas.lock();
+        if !dmas
+            .iter()
+            .any(|mapped| mapped.paddr() == dma.paddr() && mapped.size() == dma.size())
+        {
+            dmas.push(dma);
+        }
     }
 
     /// Finds an [`IoMem`] that was previously mapped to by [`Self::map_iomem`] and contains the
@@ -488,6 +525,21 @@ impl<'a> CursorMut<'a> {
     /// given physical address. Otherwise, this method returns `None`.
     pub fn find_iomem_by_paddr(&self, paddr: Paddr) -> Option<(IoMem, usize)> {
         self.vmspace.find_iomem_by_paddr(paddr)
+    }
+
+    /// Finds a [`DmaCoherent`] allocation that was previously mapped to by [`Self::map_dma`] and
+    /// contains the given physical address.
+    ///
+    /// This method can recover the originally mapped `DmaCoherent` allocation from the physical
+    /// address returned by [`Self::query`]. If the query returns a [`VmQueriedItem::MappedIoMem`]
+    /// that is not backed by an `IoMem`, this method is guaranteed to succeed with the specific
+    /// physical address. However, if the corresponding mapping is subsequently unmapped, it is
+    /// unspecified whether this method will still succeed or not.
+    ///
+    /// On success, this method returns the `DmaCoherent` allocation and the offset from the
+    /// allocation start to the given physical address. Otherwise, this method returns `None`.
+    pub fn find_dma_by_paddr(&self, paddr: Paddr) -> Option<(Arc<DmaCoherent>, usize)> {
+        self.vmspace.find_dma_by_paddr(paddr)
     }
 
     /// Clears the mapping starting from the current slot,

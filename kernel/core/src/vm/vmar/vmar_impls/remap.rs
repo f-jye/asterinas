@@ -259,9 +259,17 @@ impl Vmar {
                     cursor.jump(new_map_va).unwrap();
 
                     // For MMIO pages, find the corresponding `IoMem` and map it
-                    // at the new location
-                    let (iomem, offset) = cursor.find_iomem_by_paddr(paddr).unwrap();
-                    cursor.map_iomem(iomem, prop, PAGE_SIZE, offset);
+                    // at the new location. DMA mappings are also made of
+                    // untracked I/O pages, so they surface here as well;
+                    // recover the `DmaCoherent` allocation instead if no
+                    // `IoMem` matches.
+                    if let Some((iomem, offset)) = cursor.find_iomem_by_paddr(paddr) {
+                        cursor.map_iomem(iomem, prop, PAGE_SIZE, offset);
+                    } else if let Some((dma, offset)) = cursor.find_dma_by_paddr(paddr) {
+                        cursor.map_dma(dma, prop, PAGE_SIZE, offset);
+                    } else {
+                        panic!("Found mapped I/O page but no IoMem or DmaCoherent matches it");
+                    }
                 }
             }
 
