@@ -15,7 +15,10 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use aster_device::{AnyDevice, Class, ClassDevice, ClassHandle, DevNode};
+use aster_device::{
+    AnyDevice, Attr, AttrGroupDevice, Class, ClassDevice, ClassHandle, DevNode,
+    Error as DeviceError,
+};
 use aster_input::{
     event_type_codes::SynEvent,
     input_dev::{InputDevice, InputEvent},
@@ -264,6 +267,9 @@ impl Class for InputClass {
     type Device = Arc<EvdevDevice>;
 
     fn devnode(&self, dev: &ClassDevice<Self>) -> Option<DevNode> {
+        // Only the `eventN` nodes have a device number and thus a `/dev`
+        // node; the `inputN` devices exist for sysfs alone, as in Linux.
+        dev.base().devnum()?;
         // Linux places evdev nodes at /dev/input/eventX.
         Some(DevNode {
             path: Some(aster_device::SysStr::from(format!(
@@ -277,6 +283,96 @@ impl Class for InputClass {
 
 /// An evdev device, as seen by the char registry.
 type EvdevClassDevice = ClassDevice<InputClass>;
+
+/// The payload of an input device's sysfs attribute groups: the registered
+/// input device itself.
+type InputAttrPayload = Arc<dyn InputDevice>;
+
+/// An input device's sysfs attribute group.
+type InputAttrGroup = AttrGroupDevice<InputAttrPayload>;
+
+/// Writes a capability bitmap the way Linux formats its sysfs bitmap
+/// attributes: hexadecimal 64-bit words separated by spaces, most
+/// significant word first, with leading zero words dropped. This is the
+/// format udev's `input_id` builtin parses to classify an input device: it
+/// splits from the right, so the leftmost word is the highest one.
+fn write_bitmap(bitmap: &[u8], w: &mut dyn core::fmt::Write) -> aster_device::Result<()> {
+    let mut words: Vec<u64> = bitmap
+        .chunks(8)
+        .map(|word| {
+            let mut buffer = [0u8; 8];
+            buffer[..word.len()].copy_from_slice(word);
+            u64::from_le_bytes(buffer)
+        })
+        .collect();
+    while let Some(&0) = words.last() {
+        words.pop();
+    }
+    if words.is_empty() {
+        write!(w, "0").map_err(|_| DeviceError::Format)?;
+        return Ok(());
+    }
+    for (i, &word) in words.iter().enumerate().rev() {
+        if i + 1 < words.len() {
+            write!(w, " ").map_err(|_| DeviceError::Format)?;
+        }
+        write!(w, "{:x}", word).map_err(|_| DeviceError::Format)?;
+    }
+    Ok(())
+}
+
+/// The `capabilities/` group: which event types, keys, and relative axes the
+/// device reports. udev's `input_id` builtin reads these bitmaps to assign
+/// the `ID_INPUT_*` properties that libinput and Xorg select devices by.
+const CAPABILITIES_ATTRS: &[Attr<InputAttrGroup>] = &[
+    Attr::ro("ev", |dev, w| {
+        write!(w, "{:x}", dev.payload().capability().event_types_bits())
+            .map_err(|_| DeviceError::Format)
+    }),
+    Attr::ro("key", |dev, w| {
+        write_bitmap(dev.payload().capability().supported_keys_bitmap(), w)
+    }),
+    Attr::ro("rel", |dev, w| {
+        write_bitmap(
+            dev.payload().capability().supported_relative_axes_bitmap(),
+            w,
+        )
+    }),
+];
+
+/// The `id/` group: the input device identifier, as in Linux.
+const ID_ATTRS: &[Attr<InputAttrGroup>] = &[
+    Attr::ro("bustype", |dev, w| {
+        writeln!(w, "{:04x}", dev.payload().id().bustype()).map_err(|_| DeviceError::Format)
+    }),
+    Attr::ro("vendor", |dev, w| {
+        writeln!(w, "{:04x}", dev.payload().id().vendor()).map_err(|_| DeviceError::Format)
+    }),
+    Attr::ro("product", |dev, w| {
+        writeln!(w, "{:04x}", dev.payload().id().product()).map_err(|_| DeviceError::Format)
+    }),
+    Attr::ro("version", |dev, w| {
+        writeln!(w, "{:04x}", dev.payload().id().version()).map_err(|_| DeviceError::Format)
+    }),
+];
+
+/// The input device's own attributes, as on Linux's `inputN` devices.
+const INPUT_DEVICE_ATTRS: &[Attr<EvdevClassDevice>] = &[
+    Attr::ro("name", |dev, w| {
+        writeln!(w, "{}", dev.payload().device.name()).map_err(|_| DeviceError::Format)
+    }),
+    Attr::ro("phys", |dev, w| {
+        writeln!(w, "{}", dev.payload().device.phys()).map_err(|_| DeviceError::Format)
+    }),
+    Attr::ro("uniq", |dev, w| {
+        writeln!(w, "{}", dev.payload().device.uniq()).map_err(|_| DeviceError::Format)
+    }),
+    // No input properties (INPUT_PROP_*) are tracked yet, so report the
+    // empty bitmap, as Linux does for devices without properties.
+    Attr::ro("properties", |_dev, w| {
+        writeln!(w, "0").map_err(|_| DeviceError::Format)
+    }),
+];
 
 impl Device for EvdevClassDevice {
     fn type_(&self) -> DeviceType {
@@ -325,29 +421,70 @@ impl InputHandlerClass for EvdevHandlerClass {
         // Create an evdev device.
         let evdev = Arc::new(EvdevDevice::new(minor, dev.clone()));
 
-        // Publish through the device model: the class directory
-        // (/sys/class/input), the dev attribute, the /sys/dev/char entry and
-        // the /dev node come out together; the char registry only routes
-        // `open` back to the device.
+        // Publish through the device model, mirroring Linux's sysfs layout:
+        // an `inputN` device carrying the identity attributes (`name`,
+        // `properties`, and the `capabilities/` and `id/` groups), with the
+        // `eventN` character device below it. udev's `input_id` builtin
+        // classifies the device by reading those bitmaps; without them no
+        // `ID_INPUT` property is assigned and Xorg ignores the device.
         let class = INPUT_CLASS.call_once(|| {
             aster_device::register_class(InputClass)
                 .expect("the `input` class must not be registered twice")
         });
+        let input = ClassDevice::builder(class, format!("input{}", minor), evdev.clone())
+            .attrs(INPUT_DEVICE_ATTRS)
+            .build();
+        aster_device::add(&input).map_err(|_| ConnectError::InternalError)?;
+
+        // The groups are attached before the `eventN` uevent is emitted, so
+        // that the device is fully classified by the time user space reacts.
+        let capabilities = AttrGroupDevice::with_parent(
+            "capabilities",
+            input.clone(),
+            dev.clone(),
+            CAPABILITIES_ATTRS,
+        );
+        if aster_device::add(&capabilities).is_err() {
+            let _ = aster_device::remove(&input);
+            return Err(ConnectError::InternalError);
+        }
+        let id_group = AttrGroupDevice::with_parent("id", input.clone(), dev.clone(), ID_ATTRS);
+        if aster_device::add(&id_group).is_err() {
+            let _ = aster_device::remove(&capabilities);
+            let _ = aster_device::remove(&input);
+            return Err(ConnectError::InternalError);
+        }
+
         let id = DeviceId::new(MajorId::new(EVDEV_MAJOR_ID), minor_id);
         let device = ClassDevice::builder(class, format!("event{}", minor), evdev.clone())
+            .parent(input.clone())
             .devnum(aster_device::DevNum::char(id))
             .build();
-        aster_device::add(&device).map_err(|_| ConnectError::InternalError)?;
+        if aster_device::add(&device).is_err() {
+            let _ = aster_device::remove(&id_group);
+            let _ = aster_device::remove(&capabilities);
+            let _ = aster_device::remove(&input);
+            return Err(ConnectError::InternalError);
+        }
 
         // The char registry routes `open` to the device.
         if register(device.clone()).is_err() {
             let _ = aster_device::remove(&device);
+            let _ = aster_device::remove(&id_group);
+            let _ = aster_device::remove(&capabilities);
+            let _ = aster_device::remove(&input);
             return Err(ConnectError::InternalError);
         }
 
-        // Publish the device in the device model (sysfs topology) for
-        // udev/libinput based enumeration.
-        add_input_sysfs_node(&evdev);
+        EVDEV_SYSFS_NODES.lock().insert(
+            minor_id,
+            SysfsNodes {
+                event: device,
+                input,
+                capabilities,
+                id: id_group,
+            },
+        );
 
         // Add to our registry for looking up during disconnection.
         EVDEV_DEVICES.lock().insert(minor_id, evdev.clone());
@@ -380,7 +517,7 @@ impl InputHandlerClass for EvdevHandlerClass {
         let evdev = devices.remove(&minor).unwrap();
         let device_id = evdev.id;
 
-        // Unregister from the char device subsystem and the device model.
+        // Unregister from the char device subsystem.
         if let Err(err) = unregister(device_id) {
             ostd::warn!(
                 "Failed to unregister evdev device '{}' (minor: {}): {:?}",
@@ -389,10 +526,13 @@ impl InputHandlerClass for EvdevHandlerClass {
                 err
             );
         }
-        if let Some(class) = INPUT_CLASS.get()
-            && let Some(device) = class.find_device(&alloc::format!("event{}", minor.get()))
-        {
-            let _ = aster_device::remove(&device);
+        // Remove the device-model nodes children-first: the model refuses to
+        // remove a device that still has children.
+        if let Some(nodes) = EVDEV_SYSFS_NODES.lock().remove(&minor) {
+            let _ = aster_device::remove(&nodes.event);
+            let _ = aster_device::remove(&nodes.capabilities);
+            let _ = aster_device::remove(&nodes.id);
+            let _ = aster_device::remove(&nodes.input);
         }
 
         // TODO: Implement device node deletion when the functionality is available.
