@@ -12,6 +12,8 @@ ostd.workspace = true
 # Keep this list in sync with the `extern crate` declarations in `src/lib.rs`.
 aster-drm.workspace = true
 aster-simpledrm.workspace = true
+aster-i2c.workspace = true
+aster-i2c-hid.workspace = true
 aster-uart.workspace = true
 
 [features]

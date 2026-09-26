@@ -11,10 +11,10 @@ mod status;
 use core::ptr::NonNull;
 
 use bit_field::BitField;
-pub(super) use capability::{Capability, CapabilitySagaw};
+pub use capability::{Capability, CapabilitySagaw};
 use command::GlobalCommand;
 use extended_cap::ExtendedCapability;
-pub(super) use extended_cap::ExtendedCapabilityFlags;
+pub use extended_cap::ExtendedCapabilityFlags;
 use invalidation::InvalidationRegisters;
 use spin::Once;
 use status::GlobalStatus;
@@ -45,7 +45,7 @@ use crate::{
 };
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct IommuVersion {
+pub struct IommuVersion {
     major: u8,
     minor: u8,
 }
@@ -53,20 +53,20 @@ pub(super) struct IommuVersion {
 impl IommuVersion {
     /// Major version number
     #[expect(dead_code)]
-    pub(super) fn major(&self) -> u8 {
+    pub fn major(&self) -> u8 {
         self.major
     }
 
     /// Minor version number
     #[expect(dead_code)]
-    pub(super) fn minor(&self) -> u8 {
+    pub fn minor(&self) -> u8 {
         self.minor
     }
 }
 
 /// Important registers used by IOMMU.
 #[derive(Debug)]
-pub(super) struct IommuRegisters {
+pub struct IommuRegisters {
     version: VolatileRef<'static, u32, ReadOnly>,
     capability: VolatileRef<'static, u64, ReadOnly>,
     extended_capability: VolatileRef<'static, u64, ReadOnly>,
@@ -83,7 +83,7 @@ pub(super) struct IommuRegisters {
 impl IommuRegisters {
     /// Reads the version of IOMMU
     #[expect(dead_code)]
-    pub(super) fn read_version(&self) -> IommuVersion {
+    pub fn read_version(&self) -> IommuVersion {
         let version = self.version.as_ptr().read();
         IommuVersion {
             major: version.get_bits(4..8) as u8,
@@ -92,17 +92,17 @@ impl IommuRegisters {
     }
 
     /// Reads the capability of IOMMU
-    pub(super) fn read_capability(&self) -> Capability {
+    pub fn read_capability(&self) -> Capability {
         Capability::new(self.capability.as_ptr().read())
     }
 
     /// Reads the extended Capability of IOMMU
-    pub(super) fn read_extended_capability(&self) -> ExtendedCapability {
+    pub fn read_extended_capability(&self) -> ExtendedCapability {
         ExtendedCapability::new(self.extended_capability.as_ptr().read())
     }
 
     /// Reads the global Status of IOMMU
-    pub(super) fn read_global_status(&self) -> GlobalStatus {
+    pub fn read_global_status(&self) -> GlobalStatus {
         GlobalStatus::from_bits_truncate(self.global_status.as_ptr().read())
     }
 

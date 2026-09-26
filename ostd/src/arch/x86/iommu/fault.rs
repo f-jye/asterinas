@@ -16,7 +16,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-struct FaultEventRegisters {
+pub struct FaultEventRegisters {
     status: VolatileRef<'static, u32, ReadWrite>,
     /// bit31: Interrupt Mask; bit30: Interrupt Pending.
     _control: VolatileRef<'static, u32, ReadWrite>,
@@ -29,7 +29,7 @@ struct FaultEventRegisters {
 }
 
 impl FaultEventRegisters {
-    fn status(&self) -> FaultStatus {
+    pub fn status(&self) -> FaultStatus {
         FaultStatus::from_bits_truncate(self.status.as_ptr().read())
     }
 
@@ -95,18 +95,18 @@ impl FaultEventRegisters {
     }
 }
 
-struct FaultRecording(u128);
+pub struct FaultRecording(u128);
 
 impl FaultRecording {
-    fn is_fault(&self) -> bool {
+    pub fn is_fault(&self) -> bool {
         self.0 & (1 << 127) != 0
     }
 
-    fn clear_fault(&mut self) {
+    pub fn clear_fault(&mut self) {
         self.0 &= !(1 << 127);
     }
 
-    fn request_type(&self) -> FaultRequestType {
+    pub fn request_type(&self) -> FaultRequestType {
         // bit 126 and bit 92
         let t1 = ((self.0 & (1 << 126)) >> 125) as u8;
         let t2 = ((self.0 & (1 << 92)) >> 92) as u8;
@@ -120,7 +120,7 @@ impl FaultRecording {
         }
     }
 
-    fn address_type(&self) -> Option<FaultAddressType> {
+    pub fn address_type(&self) -> Option<FaultAddressType> {
         // bit 125:124
         match (self.0 >> 124) & 3 {
             0 => Some(FaultAddressType::UntranslatedRequest),
@@ -131,7 +131,7 @@ impl FaultRecording {
         }
     }
 
-    fn source_identifier(&self) -> u16 {
+    pub fn source_identifier(&self) -> u16 {
         // bit 79:64
         ((self.0 & 0xFFFF_0000_0000_0000_0000) >> 64) as u16
     }
@@ -147,36 +147,36 @@ impl FaultRecording {
     ///
     /// If the fault reason is the interrupt-remapping fault condition caused by a blocked
     /// Compatibility format interrupt (fault reason 0x25), this field is undefined.
-    fn fault_info(&self) -> u64 {
+    pub fn fault_info(&self) -> u64 {
         // bit 63:12
         ((self.0 & 0xFFFF_FFFF_FFFF_F000) >> 12) as u64
     }
 
     #[expect(dead_code)]
-    fn pasid_value(&self) -> u32 {
+    pub fn pasid_value(&self) -> u32 {
         // bit 123:104
         ((self.0 & 0x00FF_FFF0_0000_0000_0000_0000_0000_0000) >> 104) as u32
     }
 
-    fn fault_reason(&self) -> u8 {
+    pub fn fault_reason(&self) -> u8 {
         // bit 103:96
         ((self.0 & 0xFF_0000_0000_0000_0000_0000_0000) >> 96) as u8
     }
 
     #[expect(dead_code)]
-    fn pasid_present(&self) -> bool {
+    pub fn pasid_present(&self) -> bool {
         // bit 95
         (self.0 & 0x8000_0000_0000_0000_0000_0000) != 0
     }
 
     #[expect(dead_code)]
-    fn execute_permission_request(&self) -> bool {
+    pub fn execute_permission_request(&self) -> bool {
         // bit 94
         (self.0 & 0x4000_0000_0000_0000_0000_0000) != 0
     }
 
     #[expect(dead_code)]
-    fn privilege_mode_request(&self) -> bool {
+    pub fn privilege_mode_request(&self) -> bool {
         // bit 93
         (self.0 & 0x2000_0000_0000_0000_0000_0000) != 0
     }
@@ -198,7 +198,7 @@ impl Debug for FaultRecording {
 
 #[repr(u8)]
 #[derive(Debug)]
-enum FaultRequestType {
+pub enum FaultRequestType {
     Write = 0,
     Page = 1,
     Read = 2,
@@ -208,7 +208,7 @@ enum FaultRequestType {
 #[expect(clippy::enum_variant_names)]
 #[repr(u8)]
 #[derive(Debug)]
-enum FaultAddressType {
+pub enum FaultAddressType {
     UntranslatedRequest = 0,
     TranslationRequest = 1,
     TranslatedRequest = 2,
@@ -232,7 +232,8 @@ bitflags! {
     }
 }
 
-static FAULT_EVENT_REGS: Once<SpinLock<FaultEventRegisters, LocalIrqDisabled>> = Once::new();
+pub(super) static FAULT_EVENT_REGS: Once<SpinLock<FaultEventRegisters, LocalIrqDisabled>> =
+    Once::new();
 
 /// Initializes the fault reporting function.
 ///

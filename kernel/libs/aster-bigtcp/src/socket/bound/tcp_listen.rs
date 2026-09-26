@@ -27,7 +27,7 @@ use crate::{
 
 pub type TcpListener<E> = Socket<TcpListenerInner<E>, E>;
 
-pub(super) struct TcpBacklog<E: Ext> {
+pub struct TcpBacklog<E: Ext> {
     socket: Box<RawTcpSocket>,
     max_conn: usize,
     pub(super) connecting: BTreeMap<ConnectionKey, TcpConnection<E>>,

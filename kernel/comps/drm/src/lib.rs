@@ -25,7 +25,9 @@ use aster_core::{
     process::{UserNamespace, credentials::capabilities::CapSet, posix_thread::AsPosixThread},
     security::lsm::hooks::{self as lsm_hook, CapableContext},
 };
-use aster_device::{AnyDevice, Class, ClassDevice, ClassHandle, DevNode, DevNum, SysStr};
+use aster_device::{
+    AnyDevice, Class, ClassDevice, ClassHandle, DevNode, DevNum, SysStr, UeventVars,
+};
 use device_id::{DeviceId, MajorId, MinorId};
 use ostd::{sync::Mutex, task::Task};
 
@@ -51,7 +53,10 @@ mod gem;
 mod ioctl;
 mod minor;
 
-pub fn register_device(device: Arc<dyn DrmDevice>) -> Result<()> {
+pub fn register_device(
+    device: Arc<dyn DrmDevice>,
+    parent: Option<Arc<dyn AnyDevice>>,
+) -> Result<()> {
     let registered_device = Arc::new(RegisteredDrmDevice::new(device)?);
     if registered_device
         .device()
@@ -70,12 +75,18 @@ pub fn register_device(device: Arc<dyn DrmDevice>) -> Result<()> {
 
     let primary_minor = DrmMinor::new(registered_device, DrmMinorType::Primary);
 
-    let card = ClassDevice::builder(drm_class(), "card0", primary_minor.clone())
+    let mut card = ClassDevice::builder(&drm_class(), "card0", primary_minor.clone())
         .devnum(DevNum::char(DeviceId::new(
             MajorId::new(DRM_MAJOR_ID),
             MinorId::new(DRM_PRIMARY_MINOR_BASE),
-        )))
-        .build();
+        )));
+    // The card hangs off the underlying hardware device, as Linux's
+    // `simple-framebuffer.0/drm/card0` does; libdrm's `drmGetDevice` walks
+    // this sysfs chain, and without it mesa cannot identify the device.
+    if let Some(parent) = parent {
+        card = card.parent(parent);
+    }
+    let card = card.build();
 
     // The device model publishes sysfs topology (class dir, subsystem link,
     // dev attribute, /sys/dev/char entry) and creates the /dev node itself,
@@ -93,16 +104,16 @@ pub fn register_device(device: Arc<dyn DrmDevice>) -> Result<()> {
     Ok(())
 }
 
-fn drm_class() -> &'static Arc<ClassHandle<DrmClass>> {
-    static DRM_CLASS: Mutex<Option<&'static Arc<ClassHandle<DrmClass>>>> = Mutex::new(None);
-    let mut guard = DRM_CLASS.lock();
-    if guard.is_none() {
-        let handle = Box::leak(Box::new(aster_device::register_class(DrmClass).unwrap()));
-        *guard = Some(handle);
-    }
-    guard.as_ref().unwrap()
+fn drm_class() -> Arc<ClassHandle<DrmClass>> {
+    static DRM_CLASS: Mutex<Option<Arc<ClassHandle<DrmClass>>>> = Mutex::new(None);
+    DRM_CLASS
+        .lock()
+        .get_or_insert_with(|| {
+            aster_device::register_class(DrmClass)
+                .expect("the `drm` class must not be registered twice")
+        })
+        .clone()
 }
-
 const DRM_MAJOR_ID: u16 = 226;
 const DRM_PRIMARY_MINOR_BASE: u32 = 0;
 
@@ -111,12 +122,7 @@ const DRM_PRIMARY_MINOR_BASE: u32 = 0;
 struct DrmClass;
 
 impl Class for DrmClass {
-    // TODO: Name the class `drm` once GEM/PRIME support lands. Xorg's
-    // platform probe claims any `/sys/class/drm` device as a primary GPU and
-    // binds the modesetting driver to it, which currently aborts during DRI2
-    // extension initialization; naming the class differently keeps the fbdev
-    // X server working until then.
-    const NAME: &'static str = "aster-drm";
+    const NAME: &'static str = "drm";
     type Device = Arc<DrmMinor>;
 
     fn devnode(&self, dev: &ClassDevice<Self>) -> Option<DevNode> {
@@ -124,6 +130,13 @@ impl Class for DrmClass {
             path: Some(SysStr::from(format!("dri/{}", dev.base().name()))),
             mode: None,
         })
+    }
+
+    fn uevent(&self, _dev: &ClassDevice<Self>, vars: &mut UeventVars) {
+        // The Linux device type of a DRM card minor. Mutter's native backend
+        // only treats udev devices carrying this type as GPUs.
+        // Reference: <https://elixir.bootlin.com/linux/v6.17/source/drivers/gpu/drm/drm_sysfs.c#L56>
+        vars.add("DEVTYPE", "drm_minor");
     }
 }
 

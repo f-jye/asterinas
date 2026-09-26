@@ -58,8 +58,8 @@ pub struct SysAttrSet {
 }
 
 impl SysAttrSet {
-    /// Maximum number of attributes allowed per node.
-    pub const CAPACITY: usize = u8::MAX as usize;
+    /// Maximum number of attributes allowed per node (limited by u8 ID space).
+    pub const CAPACITY: usize = 1 << u8::BITS;
 
     /// Creates a new, empty attribute set.
     ///
@@ -131,21 +131,7 @@ pub struct SysAttrSetBuilder {
 impl SysAttrSetBuilder {
     /// Creates a new builder.
     pub fn new() -> Self {
-        Self {
-            attrs: BTreeMap::new(),
-            ids: IdAlloc::with_capacity(SysAttrSet::CAPACITY),
-            error: None,
-        }
-    }
-
-    /// Creates a builder from `set`, keeping IDs stable for attributes that remain present.
-    pub fn from_set(set: &SysAttrSet) -> Self {
-        let mut builder = Self::new();
-        for attr in set.iter() {
-            builder.ids.alloc_specific(attr.id() as usize).unwrap();
-            builder.attrs.insert(attr.name().clone(), attr.clone());
-        }
-        builder
+        Default::default()
     }
 
     /// Creates a builder holding the attributes of `set`, with their IDs.
@@ -163,13 +149,6 @@ impl SysAttrSetBuilder {
     /// If an attribute with the same name already exists, this is a no-op, so
     /// the existing attribute keeps its ID and its permissions.
     pub fn add(&mut self, name: SysStr, perms: SysPerms) -> &mut Self {
-        if self.error.is_some() {
-            return self;
-        }
-        if !crate::is_valid_name(&name) {
-            self.error = Some(Error::InvalidName);
-            return self;
-        }
         if self.attrs.contains_key(&name) {
             return self;
         }
@@ -227,11 +206,5 @@ impl SysAttrSetBuilder {
     fn free_id(&mut self, id: u8) {
         let id = id as u32;
         self.ids[(id / u64::BITS) as usize] &= !(1u64 << (id % u64::BITS));
-    }
-}
-
-impl Default for SysAttrSetBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }

@@ -27,32 +27,16 @@ use ostd::{
     sync::{LocalIrqDisabled, SpinLock},
 };
 use queue::FsRequestQueue;
-use request::{FuseRequest, RequestBufs};
+use request::FuseRequest;
+use smallvec::smallvec;
 use spin::Once;
 use waiter::{FuseWaiter, ReplyBufs};
 
 pub use self::session::{AttrVersion, FuseSession};
 use crate::{
-    device::filesystem::{
-        pool,
-        pool::{FuseDataBuf, FuseReplyBuf, FuseReplyBufs, FuseRequestBuf, VirtiofsDmaPool},
-    },
+    device::filesystem::pool::{FuseDataBuf, FuseReplyBuf, FuseRequestBuf, SizeClassedDmaPool},
     transport::DeviceTransport,
 };
-
-/// Maximum data pages packed into one FUSE read request as DMA buffers.
-///
-/// A read request reserves one virtqueue descriptor for its request header and
-/// one for its reply header. Batching beyond this limit must be split across
-/// multiple requests.
-pub const MAX_READ_DATA_PAGES_PER_REQUEST: usize = queue::MAX_DMA_BUFS_PER_REQUEST - 2;
-
-/// Maximum data pages packed into one FUSE write request as DMA buffers.
-///
-/// A write request reserves one descriptor each for its request header, reply
-/// header, and write reply payload. Batching beyond this limit must be split
-/// across multiple requests.
-pub const MAX_WRITE_DATA_PAGES_PER_REQUEST: usize = queue::MAX_DMA_BUFS_PER_REQUEST - 3;
 
 static FILESYSTEM_DEVICES: Once<SpinLock<Vec<Arc<FileSystemDevice>>, LocalIrqDisabled>> =
     Once::new();
@@ -68,8 +52,8 @@ pub struct FileSystemDevice {
     transport: SpinLock<DeviceTransport, LocalIrqDisabled>,
     hiprio_queue: Arc<FsRequestQueue>,
     request_queues: Vec<Arc<FsRequestQueue>>,
-    to_device_pool: VirtiofsDmaPool<ToDevice>,
-    from_device_pool: VirtiofsDmaPool<FromDevice>,
+    to_device_pool: SizeClassedDmaPool<ToDevice>,
+    from_device_pool: SizeClassedDmaPool<FromDevice>,
     next_unique: AtomicU64,
     tag: String,
     notify_supported: bool,
@@ -83,14 +67,12 @@ impl FileSystemDevice {
         tag: String,
         notify_supported: bool,
     ) -> Self {
-        let (to_device_arena_pool, from_device_arena_pool) = pool::dma_arena_pools_singleton();
-
         Self {
             transport: SpinLock::new(transport),
             hiprio_queue,
             request_queues,
-            to_device_pool: VirtiofsDmaPool::new(to_device_arena_pool),
-            from_device_pool: VirtiofsDmaPool::new(from_device_arena_pool),
+            to_device_pool: SizeClassedDmaPool::new(),
+            from_device_pool: SizeClassedDmaPool::new(),
             // Start request IDs at 1 and keep 0 unused. In FUSE,
             // `unique == 0` is reserved for unsolicited notification messages
             // rather than ordinary request/reply matching.
@@ -111,10 +93,10 @@ impl FileSystemDevice {
         &self,
         nodeid: FuseNodeId,
         operation: &mut Op,
-        data_bufs: Option<FuseDataBuf>,
+        data_buf: Option<FuseDataBuf>,
         complete_fn: Option<FuseCompleteFn>,
     ) -> Result<Arc<FuseWaiter>, FuseError> {
-        let request = self.prepare_request(nodeid, operation, data_bufs, complete_fn)?;
+        let request = self.prepare_request(nodeid, operation, data_buf, complete_fn)?;
         let waiter = request.waiter().clone();
 
         let queue = self.select_request_queue(request.nodeid());
@@ -135,48 +117,39 @@ impl FileSystemDevice {
         &self,
         nodeid: FuseNodeId,
         operation: &mut Op,
-        data_bufs: Option<FuseDataBuf>,
+        data_buf: Option<FuseDataBuf>,
         complete_fn: Option<FuseCompleteFn>,
     ) -> Result<FuseRequest, FuseError> {
         let unique = self.alloc_unique();
         let reply_expectation = operation.reply_expectation();
 
-        let data_buf_len = match data_bufs.as_ref() {
-            Some(FuseDataBuf::Write(data_bufs)) => data_bufs.iter().map(FuseRequestBuf::len).sum(),
+        let data_buf_len = match data_buf.as_ref() {
+            Some(FuseDataBuf::Write(data_buf)) => data_buf.len(),
             _ => 0,
         };
 
         let request_buf =
             self.alloc_and_fill_request_buf(nodeid, operation, unique, data_buf_len)?;
 
-        let (request_bufs, reply_bufs) = match data_bufs {
-            Some(FuseDataBuf::Read(data_bufs)) => {
-                let reply_bufs = self.alloc_reply_bufs(reply_expectation, Some(data_bufs))?;
-                let mut request_bufs = RequestBufs::new();
-                request_bufs.push(request_buf);
-                (request_bufs, reply_bufs)
-            }
-            Some(FuseDataBuf::Write(data_bufs)) => {
-                for data_buf in data_bufs.iter() {
-                    data_buf.sync_to_device().unwrap();
-                }
+        let (request_bufs, reply_bufs) = match data_buf {
+            Some(FuseDataBuf::Read(data_buf)) => (
+                smallvec![request_buf],
+                self.alloc_reply_bufs(reply_expectation, Some(data_buf))?,
+            ),
+            Some(FuseDataBuf::Write(data_buf)) => {
+                data_buf.sync_to_device().unwrap();
 
                 let reply_bufs = self.alloc_reply_bufs(reply_expectation, None)?;
-                if reply_bufs.is_empty() {
+                if reply_bufs.header().is_none() {
                     return Err(FuseError::MalformedResponse);
                 }
 
-                let mut request_bufs = RequestBufs::new();
-                request_bufs.push(request_buf);
-                request_bufs.extend(data_bufs);
-                (request_bufs, reply_bufs)
+                (smallvec![request_buf, data_buf], reply_bufs)
             }
             None => {
                 let reply_bufs = self.alloc_reply_bufs(reply_expectation, None)?;
 
-                let mut request_bufs = RequestBufs::new();
-                request_bufs.push(request_buf);
-                (request_bufs, reply_bufs)
+                (smallvec![request_buf], reply_bufs)
             }
         };
 
@@ -248,46 +221,35 @@ impl FileSystemDevice {
     fn alloc_reply_bufs(
         &self,
         reply_expectation: ReplyExpectation,
-        data_bufs: Option<FuseReplyBufs>,
+        data_buf: Option<FuseReplyBuf>,
     ) -> Result<ReplyBufs, FuseError> {
-        match (reply_expectation, data_bufs) {
-            (ReplyExpectation::None, None) => Ok(ReplyBufs::new(None)),
+        match (reply_expectation, data_buf) {
+            (ReplyExpectation::None, None) => Ok(ReplyBufs::new_none()),
             (ReplyExpectation::HeaderOnly, None) => {
-                let header_buf = self.alloc_reply_header_buf()?;
-                Ok(ReplyBufs::new(Some(header_buf)))
+                Ok(ReplyBufs::new_header_only(self.alloc_reply_header_buf()?))
             }
             (
                 ReplyExpectation::FixedPayload(payload_size)
                 | ReplyExpectation::VariablePayload(payload_size),
                 None,
-            ) => {
-                let mut reply_bufs = ReplyBufs::new(Some(self.alloc_reply_header_buf()?));
-                reply_bufs.push_payload(self.alloc_reply_payload_buf(payload_size.get())?);
-                Ok(reply_bufs)
-            }
-            (ReplyExpectation::WritePayload { .. }, None) => {
-                let mut reply_bufs = ReplyBufs::new(Some(self.alloc_reply_header_buf()?));
-                reply_bufs.push_payload(
-                    self.alloc_reply_payload_buf(size_of::<aster_fuse::ops::write::WriteReply>())?,
-                );
-                Ok(reply_bufs)
-            }
+            ) => Ok(ReplyBufs::new_with_payload(
+                self.alloc_reply_header_buf()?,
+                self.alloc_reply_payload_buf(payload_size.get())?,
+            )),
             (
                 ReplyExpectation::FixedPayload(payload_size)
                 | ReplyExpectation::VariablePayload(payload_size),
-                Some(data_bufs),
+                Some(data_buf),
             ) => {
-                if payload_size.get() > data_bufs.iter().map(FuseReplyBuf::len).sum() {
+                if payload_size.get() > data_buf.len() {
                     return Err(FuseError::BufferTooSmall);
                 }
 
-                let mut reply_bufs = ReplyBufs::new(Some(self.alloc_reply_header_buf()?));
-                for data_buf in data_bufs {
-                    reply_bufs.push_payload(data_buf);
-                }
-                Ok(reply_bufs)
+                Ok(ReplyBufs::new_with_payload(
+                    self.alloc_reply_header_buf()?,
+                    data_buf,
+                ))
             }
-            (ReplyExpectation::WritePayload { .. }, Some(_)) => Err(FuseError::MalformedResponse),
             (_, Some(_)) => Err(FuseError::MalformedResponse),
         }
     }

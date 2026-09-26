@@ -23,12 +23,9 @@ use aster_fuse::{
     },
 };
 use ostd::{info, mm::io::util::HasVmReaderWriter};
-use smallvec::smallvec;
 
 use super::{super::DEVICE_NAME, FileSystemDevice, FuseWaiter};
-use crate::device::filesystem::pool::{
-    FuseDataBuf, FuseReplyBuf, FuseReplyBufs, FuseRequestBuf, FuseRequestBufs,
-};
+use crate::device::filesystem::pool::{FuseDataBuf, FuseReplyBuf, FuseRequestBuf};
 
 /// A mount-scoped FUSE session.
 ///
@@ -43,9 +40,9 @@ pub struct FuseSession {
     /// The maximum write size accepted by the server.
     max_write: u32,
     /// The feature flags selected by `FUSE_INIT`.
+    //
+    // TODO: Apply negotiated `FUSE_INIT` flags to conduct virtio-fs behavior.
     negotiated_flags: FuseInitFlags,
-    /// The extended feature flags selected by `FUSE_INIT`.
-    negotiated_flags2: FuseInitFlags2,
 }
 
 impl FuseSession {
@@ -70,7 +67,6 @@ impl FuseSession {
             attr_version: AtomicU64::new(1),
             max_write,
             negotiated_flags: init_reply.flags(),
-            negotiated_flags2: init_reply.flags2(),
         });
 
         info!(
@@ -148,11 +144,6 @@ impl FuseSession {
         self.negotiated_flags
     }
 
-    /// Returns the extended FUSE feature flags selected after negotiation.
-    pub fn negotiated_flags2(&self) -> FuseInitFlags2 {
-        self.negotiated_flags2
-    }
-
     /// Returns the maximum write size accepted by the server.
     pub fn max_write(&self) -> u32 {
         self.max_write
@@ -176,7 +167,7 @@ impl FuseSession {
         read_request: ReadReq,
         data_buf: FuseReplyBuf,
     ) -> Result<usize, FuseError> {
-        let waiter = self.read_async(nodeid, read_request, smallvec![data_buf], None)?;
+        let waiter = self.read_async(nodeid, read_request, data_buf, None)?;
         let read_len = waiter.wait().payload_len()?;
         if read_len > read_request.size() as usize {
             return Err(FuseError::MalformedResponse);
@@ -194,14 +185,14 @@ impl FuseSession {
         &self,
         nodeid: FuseNodeId,
         read_request: ReadReq,
-        data_bufs: FuseReplyBufs,
+        data_buf: FuseReplyBuf,
         complete_fn: Option<FuseCompleteFn>,
     ) -> Result<Arc<FuseWaiter>, FuseError> {
         let mut operation = ReadOperation::new(read_request);
         self.device.submit_fuse_op(
             nodeid,
             &mut operation,
-            Some(FuseDataBuf::Read(data_bufs)),
+            Some(FuseDataBuf::Read(data_buf)),
             complete_fn,
         )
     }
@@ -217,7 +208,7 @@ impl FuseSession {
         let waiter = self.device.submit_fuse_op(
             nodeid,
             &mut operation,
-            Some(FuseDataBuf::Read(smallvec![data_buf.clone()])),
+            Some(FuseDataBuf::Read(data_buf.clone())),
             None,
         )?;
         let payload_len = waiter.wait().payload_len()?;
@@ -235,7 +226,7 @@ impl FuseSession {
         let waiter = self.device.submit_fuse_op(
             nodeid,
             &mut operation,
-            Some(FuseDataBuf::Read(smallvec![data_buf.clone()])),
+            Some(FuseDataBuf::Read(data_buf.clone())),
             None,
         )?;
         let payload_len = waiter.wait().payload_len()?;
@@ -253,7 +244,7 @@ impl FuseSession {
         write_request: WriteReq,
         data_buf: FuseRequestBuf,
     ) -> Result<usize, FuseError> {
-        let waiter = self.write_async(nodeid, write_request, smallvec![data_buf], None)?;
+        let waiter = self.write_async(nodeid, write_request, data_buf, None)?;
         let payload_len = waiter.wait().payload_len()?;
 
         let write_reply = waiter.parse_reply::<WriteOperation>(payload_len)?;
@@ -273,14 +264,14 @@ impl FuseSession {
         &self,
         nodeid: FuseNodeId,
         write_request: WriteReq,
-        data_bufs: FuseRequestBufs,
+        data_buf: FuseRequestBuf,
         complete_fn: Option<FuseCompleteFn>,
     ) -> Result<Arc<FuseWaiter>, FuseError> {
         let mut operation = WriteOperation::new(write_request);
         self.device.submit_fuse_op(
             nodeid,
             &mut operation,
-            Some(FuseDataBuf::Write(data_bufs)),
+            Some(FuseDataBuf::Write(data_buf)),
             complete_fn,
         )
     }

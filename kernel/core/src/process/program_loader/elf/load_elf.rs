@@ -62,7 +62,10 @@ pub(crate) fn load_elf_to_vmar(
 ) -> Result<ElfLoadInfo> {
     let ldso = lookup_and_parse_ldso(&elf_headers, &elf_file, path_resolver)?;
 
-    #[cfg_attr(target_arch = "loongarch64", expect(unused_mut))]
+    #[cfg_attr(
+        not(any(target_arch = "x86_64", target_arch = "riscv64")),
+        expect(unused_mut)
+    )]
     let (elf_mapped_info, entry_point, mut aux_vec) =
         map_vmos_and_build_aux_vec(vmar, ldso, &elf_headers, &elf_file)?;
     vmar.process_vm()
@@ -73,9 +76,9 @@ pub(crate) fn load_elf_to_vmar(
     // Map the vDSO and set the entry.
     // Since the vDSO does not require being mapped to any specific address,
     // the vDSO is mapped after the ELF file, heap, and stack.
-    #[cfg(not(target_arch = "loongarch64"))]
+    #[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
     if let Some(vdso_text_base) = map_vdso_to_vmar(vmar) {
-        #[cfg(any(target_arch = "riscv64", target_arch = "aarch64"))]
+        #[cfg(target_arch = "riscv64")]
         vmar.process_vm().set_vdso_base(vdso_text_base);
         aux_vec.set(AuxKey::AT_SYSINFO_EHDR, vdso_text_base as u64);
     }
@@ -419,7 +422,7 @@ fn map_segment_vmo(
     if segment_size != 0 {
         let vm_map_options = vmar
             .new_map(segment_size, perms)
-            .mappable(&elf_file)?
+            .mappable(elf_file)?
             .vmo_offset(segment_offset)
             .offset(VmarMapOffset::FixedReplace(offset))
             .handle_page_faults_around();
@@ -488,7 +491,7 @@ fn init_aux_vec(
 }
 
 /// Maps the vDSO VMO to the corresponding virtual memory address.
-#[cfg(not(target_arch = "loongarch64"))]
+#[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
 fn map_vdso_to_vmar(vmar: &Vmar) -> Option<Vaddr> {
     use crate::vdso::{VDSO_VMO_LAYOUT, vdso_vmo};
 

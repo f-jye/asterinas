@@ -18,7 +18,7 @@ use super::remapping::{Andd, Atsr, Drhd, Rhsa, Rmrr, Satc, Sidp};
 /// the DRHD table in this structure to obtain the register base addresses used to configure
 /// functions such IOMMU.
 #[derive(Debug)]
-pub(in crate::arch) struct Dmar {
+pub struct Dmar {
     header: DmarHeader,
     // The actual size is indicated by `length` in `header`.
     // Entries with the format of Remapping Structures are followed.
@@ -30,7 +30,7 @@ pub(in crate::arch) struct Dmar {
 /// A DMAR structure contains serval remapping structures. Among these structures,
 /// one DRHD must exist, the others must not exist at all.
 #[derive(Debug)]
-pub(in crate::arch) enum Remapping {
+pub enum Remapping {
     Drhd(Drhd),
     Rmrr(Rmrr),
     Atsr(Atsr),
@@ -43,7 +43,7 @@ pub(in crate::arch) enum Remapping {
 #[expect(clippy::upper_case_acronyms)]
 #[repr(u16)]
 #[derive(Clone, Copy, Debug)]
-enum RemappingType {
+pub enum RemappingType {
     DRHD = 0,
     RMRR = 1,
     ATSR = 2,
@@ -73,7 +73,7 @@ unsafe impl AcpiTable for DmarHeader {
 
 impl Dmar {
     /// Creates a instance from ACPI table.
-    pub(in crate::arch) fn new() -> Option<Self> {
+    pub fn new() -> Option<Self> {
         let acpi_table = super::get_acpi_tables()?;
 
         let dmar_mapping = acpi_table.find_table::<DmarHeader>().ok()?;
@@ -128,7 +128,7 @@ impl Dmar {
         })
     }
 
-    pub(in crate::arch) fn remapping_iter(&self) -> Iter<'_, Remapping> {
+    pub fn remapping_iter(&self) -> Iter<'_, Remapping> {
         self.remapping_structures.iter()
     }
 }

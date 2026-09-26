@@ -90,6 +90,12 @@ pub(super) fn init(
     let registered_device = aster_input::register_device(keyboard_device);
     REGISTERED_DEVICE.call_once(|| registered_device);
 
+    // A PS/2 keyboard starts with scanning disabled after a reset or power-on
+    // and must be explicitly enabled, like Linux's `atkbd_activate`. Without
+    // this, the keyboard never generates scancodes even though the device is
+    // registered.
+    init_ctx.command::<cmd::EnableScanning>(&[], &mut [])?;
+
     Ok(())
 }
 
@@ -137,6 +143,7 @@ mod cmd {
 
     define_commands! {
         GetDeviceId, 0xF2, fn([u8; 0]) -> [u8; 2];
+        EnableScanning, 0xF4, fn([u8; 0]) -> [u8; 0];
     }
 }
 

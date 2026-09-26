@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! NS16550A UART console support.
-
 use alloc::string::ToString;
 
 use fdt::node::FdtNode;
@@ -16,8 +14,6 @@ use ostd::{
 use spin::Once;
 
 use crate::console::{Uart, UartConsole};
-
-pub(super) const FDT_COMPATIBLES: [&str; 1] = ["ns16550a"];
 
 /// Access to serial registers via `IoMem`.
 struct SerialAccess {

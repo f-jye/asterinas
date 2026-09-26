@@ -406,27 +406,21 @@ impl<'a> CursorMut<'a> {
     /// # Panics
     ///
     /// Panics if
-    ///  - `len`, `offset`, or the address range of the `IoMem` instance is
-    ///    not aligned to the page size;
+    ///  - `len` or `offset` is not aligned to the page size;
     ///  - the current virtual address is already mapped.
     pub fn map_iomem(&mut self, io_mem: IoMem, prop: PageProperty, len: usize, offset: usize) {
         assert_eq!(len % PAGE_SIZE, 0);
         assert_eq!(offset % PAGE_SIZE, 0);
 
-        let io_mem_paddr = io_mem.paddr();
-        let io_mem_size = io_mem.size();
-        assert_eq!(io_mem_paddr % PAGE_SIZE, 0);
-        assert_eq!(io_mem_size % PAGE_SIZE, 0);
-
-        if offset >= io_mem_size {
+        if offset >= io_mem.size() {
             return;
         }
 
-        let paddr_begin = io_mem_paddr + offset;
-        let paddr_end = if io_mem_size - offset < len {
-            io_mem_paddr + io_mem_size
+        let paddr_begin = io_mem.paddr() + offset;
+        let paddr_end = if io_mem.size() - offset < len {
+            io_mem.paddr() + io_mem.size()
         } else {
-            io_mem_paddr + len + offset
+            io_mem.paddr() + len + offset
         };
 
         for current_paddr in (paddr_begin..paddr_end).step_by(PAGE_SIZE) {
@@ -437,15 +431,13 @@ impl<'a> CursorMut<'a> {
             };
         }
 
-        fn io_mem_contains(parent: &IoMem, child: &IoMem) -> bool {
-            parent.paddr() <= child.paddr() && child.end_paddr() <= parent.end_paddr()
-        }
-
         // If the `iomems` list in `VmSpace` does not contain the current I/O
         // memory, push it to maintain the correct reference count.
         let mut iomems = self.vmspace.iomems.lock();
-        if !iomems.iter().any(|iomem| io_mem_contains(iomem, &io_mem)) {
-            iomems.retain(|iomem| !io_mem_contains(&io_mem, iomem));
+        if !iomems
+            .iter()
+            .any(|iomem| iomem.paddr() == io_mem.paddr() && iomem.size() == io_mem.size())
+        {
             iomems.push(io_mem);
         }
     }

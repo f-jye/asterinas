@@ -108,7 +108,7 @@ impl<T: Inner<E>, E: Ext> Socket<T, E> {
 
 define_boolean_value!(
     /// Whether the iface needs to be polled
-    pub NeedIfacePoll
+    NeedIfacePoll
 );
 
 impl<T: Inner<E>, E: Ext> SocketBg<T, E> {

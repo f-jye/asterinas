@@ -5,11 +5,11 @@ use core::num::NonZeroUsize;
 use super::{MappedDma, MappedMemory, MappedVmo, RssDelta, VmMapping, Vmar};
 use crate::{
     fs::{
-        file::{FileLike, MappableObject},
+        file::{FileLike, Mappable},
         ramfs::memfd::MemfdInode,
     },
     prelude::*,
-    vm::{page_cache::Vmo, perms::VmPerms, vmar::MapHandle},
+    vm::{page_cache::Vmo, perms::VmPerms},
 };
 
 impl Vmar {
@@ -47,15 +47,15 @@ impl Vmar {
     /// ```
     ///
     /// For more details on the available options, see [`VmarMapOptions`].
-    pub(crate) fn new_map<'b>(&self, size: usize, perms: VmPerms) -> VmarMapOptions<'_, 'b> {
+    pub(crate) fn new_map(&self, size: usize, perms: VmPerms) -> VmarMapOptions<'_> {
         VmarMapOptions::new(self, size, perms)
     }
 }
 
 /// Options for creating a new mapping.
-pub(crate) struct VmarMapOptions<'a, 'b> {
+pub(crate) struct VmarMapOptions<'a> {
     parent: &'a Vmar,
-    mappable: Option<MappableObject<'b>>,
+    mappable: Option<Mappable>,
     file: Option<Arc<dyn FileLike>>,
     perms: VmPerms,
     may_perms: VmPerms,
@@ -63,10 +63,10 @@ pub(crate) struct VmarMapOptions<'a, 'b> {
     size: usize,
     offset: VmarMapOffset,
     align: usize,
-    /// The sharing mode of the mapping.
-    map_mode: MmapMode,
-    /// Whether the mapping needs to handle surrounding pages when handling
-    /// page fault.
+    // Whether the mapping is mapped with `MAP_SHARED`.
+    is_shared: bool,
+    // Whether the mapping needs to handle surrounding pages when handling
+    // page fault.
     handle_page_faults_around: bool,
 }
 
@@ -101,7 +101,7 @@ pub(crate) enum VmarMapOffset {
     Any,
 }
 
-impl<'a, 'b> VmarMapOptions<'a, 'b> {
+impl<'a> VmarMapOptions<'a> {
     /// Creates a default set of options with the size and the memory access
     /// permissions.
     fn new(parent: &'a Vmar, size: usize, perms: VmPerms) -> Self {
@@ -115,7 +115,7 @@ impl<'a, 'b> VmarMapOptions<'a, 'b> {
             size,
             offset: VmarMapOffset::Any,
             align: PAGE_SIZE,
-            map_mode: MmapMode::Private,
+            is_shared: false,
             handle_page_faults_around: false,
         }
     }
@@ -147,18 +147,16 @@ impl<'a, 'b> VmarMapOptions<'a, 'b> {
     ///     oversized mappings can reserve space for future expansions.
     ///
     /// The [`Vmo`] of a mapping will be implicitly set if [`Self::mappable`] is
-    /// set with a [`MappableObject::Vmo`].
+    /// set with a [`Mappable::Vmo`].
     ///
     /// # Panics
     ///
     /// This function panics if a [`Vmo`] or [`Mappable`] is already provided.
-    ///
-    /// [`Mappable`]: crate::fs::file::Mappable
     pub(crate) fn vmo(mut self, vmo: Arc<Vmo>) -> Self {
         if self.mappable.is_some() {
             panic!("Cannot set `vmo` when `mappable` is already set");
         }
-        self.mappable = Some(MappableObject::Vmo(vmo));
+        self.mappable = Some(Mappable::Vmo(vmo));
 
         self
     }
@@ -197,13 +195,15 @@ impl<'a, 'b> VmarMapOptions<'a, 'b> {
         self
     }
 
-    /// Sets the sharing mode of the mapping.
+    /// Sets whether the mapping can be shared with other process.
     ///
-    /// The default value is [`MmapMode::Private`].
+    /// The default value is false.
     ///
-    /// A shared mapping is shared with child processes when forking.
-    pub(crate) fn map_mode(mut self, map_mode: MmapMode) -> Self {
-        self.map_mode = map_mode;
+    /// If this value is set to true, the mapping will be shared with child
+    /// process when forking.
+    #[expect(clippy::wrong_self_convention)]
+    pub(crate) fn is_shared(mut self, is_shared: bool) -> Self {
+        self.is_shared = is_shared;
         self
     }
 
@@ -213,11 +213,10 @@ impl<'a, 'b> VmarMapOptions<'a, 'b> {
         self
     }
 
-    /// Binds the file's [`MappableObject`] to the mapping and sets the file of
-    /// the mapping.
+    /// Binds the file's [`Mappable`] object to the mapping.
     ///
-    /// This method accepts file-specific details, like a page cache (inode) or
-    /// I/O memory, but not both simultaneously.
+    /// This method accepts file-specific details, like a page cache (inode)
+    /// or I/O memory, but not both simultaneously.
     ///
     /// # Panics
     ///
@@ -228,9 +227,7 @@ impl<'a, 'b> VmarMapOptions<'a, 'b> {
     ///
     /// This function returns an error if the file does not have a corresponding
     /// mappable object of [`Mappable`].
-    ///
-    /// [`Mappable`]: crate::fs::file::Mappable
-    pub(crate) fn mappable(mut self, file: &'b Arc<dyn FileLike>) -> Result<Self> {
+    pub(crate) fn mappable(mut self, file: Arc<dyn FileLike>) -> Result<Self> {
         if self.mappable.is_some() {
             panic!("Cannot set `mappable` when `mappable` is already set");
         }
@@ -238,9 +235,9 @@ impl<'a, 'b> VmarMapOptions<'a, 'b> {
             panic!("Cannot set `mappable` when `file` is already set");
         }
 
-        let mappable = file.mappable(FileMmapRequest::new(self.map_mode.is_shared()))?;
+        let mappable = file.mappable()?;
         self.mappable = Some(mappable);
-        self.file = Some(file.clone());
+        self.file = Some(file);
 
         Ok(self)
     }
@@ -262,7 +259,7 @@ impl<'a, 'b> VmarMapOptions<'a, 'b> {
             size: map_size,
             offset,
             align,
-            map_mode,
+            is_shared,
             handle_page_faults_around,
         } = self;
 
@@ -326,8 +323,8 @@ impl<'a, 'b> VmarMapOptions<'a, 'b> {
         };
 
         // Parse the `Mappable` and prepare the `MappedMemory`.
-        let (mapped_mem, device_mappable) = match mappable {
-            Some(MappableObject::Vmo(vmo)) => {
+        let (mapped_mem, io_mem) = match mappable {
+            Some(Mappable::Vmo(vmo)) => {
                 let path = file.as_ref().map(|file| file.path());
 
                 if let Some(path) = path {
@@ -336,7 +333,7 @@ impl<'a, 'b> VmarMapOptions<'a, 'b> {
 
                 let is_writable_tracked = if let Some(path) = path
                     && let Some(memfd_inode) = path.inode().downcast_ref::<MemfdInode>()
-                    && map_mode.is_shared()
+                    && is_shared
                     && may_perms.contains(VmPerms::MAY_WRITE)
                 {
                     memfd_inode.check_writable(perms, &mut may_perms)?;
@@ -355,12 +352,12 @@ impl<'a, 'b> VmarMapOptions<'a, 'b> {
         };
 
         // Build the mapping.
-        let mut vm_mapping = VmMapping::new(
+        let vm_mapping = VmMapping::new(
             NonZeroUsize::new(map_size).unwrap(),
             map_to_addr,
             mapped_mem,
             file,
-            map_mode,
+            is_shared,
             handle_page_faults_around,
             perms | may_perms,
         );
@@ -435,37 +432,5 @@ impl<'a, 'b> VmarMapOptions<'a, 'b> {
 
         let vm_perms = self.perms | self.may_perms;
         vm_perms.check()
-    }
-}
-
-/// Properties of a virtual memory mapping that may affect file-specific behavior.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FileMmapRequest {
-    is_shared: bool,
-}
-
-impl FileMmapRequest {
-    pub(crate) const fn new(is_shared: bool) -> Self {
-        Self { is_shared }
-    }
-
-    /// Returns whether the mapping uses shared semantics.
-    pub const fn is_shared(self) -> bool {
-        self.is_shared
-    }
-}
-
-/// The sharing mode of a virtual memory mapping.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MmapMode {
-    /// Private mappings use copy-on-write semantics.
-    Private,
-    /// Shared mappings propagate updates to the underlying mapped object.
-    Shared,
-}
-
-impl MmapMode {
-    pub(crate) const fn is_shared(self) -> bool {
-        matches!(self, Self::Shared)
     }
 }

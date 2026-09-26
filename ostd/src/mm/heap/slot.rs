@@ -148,6 +148,6 @@ impl HeapSlot {
 
 /// The frames allocated for a large allocation.
 #[derive(Debug)]
-pub(crate) struct LargeAllocFrameMeta;
+pub struct LargeAllocFrameMeta;
 
 impl_frame_meta_for!(LargeAllocFrameMeta);

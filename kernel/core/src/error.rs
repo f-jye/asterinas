@@ -374,7 +374,7 @@ impl From<aster_systree::Error> for Error {
         use aster_systree::Error::*;
         match err {
             NotFound => Error::new(Errno::ENOENT),
-            InvalidOperation | InvalidName => Error::new(Errno::EINVAL),
+            InvalidOperation => Error::new(Errno::EINVAL),
             ResourceUnavailable => Error::new(Errno::EBUSY),
             AttributeError => Error::new(Errno::EIO),
             PermissionDenied => Error::new(Errno::EACCES),

@@ -9,7 +9,7 @@ use crate::{
     vm::{
         page_cache::VmoOptions,
         perms::VmPerms,
-        vmar::{MmapMode, VMAR_CAP_ADDR, VMAR_LOWEST_ADDR, VmarMapOffset},
+        vmar::{VMAR_CAP_ADDR, VMAR_LOWEST_ADDR, VmarMapOffset},
     },
 };
 
@@ -75,8 +75,7 @@ fn do_sys_mmap(
 
     let user_space = ctx.user_space();
     let vmar = user_space.vmar();
-
-    let map_addr = {
+    let vm_map_options = {
         let mut options = vmar.new_map(len, vm_perms);
 
         if option.flags().is_fixed() {
@@ -100,7 +99,7 @@ fn do_sys_mmap(
         }
 
         if option.typ().is_shared() {
-            options = options.map_mode(MmapMode::Shared);
+            options = options.is_shared(true);
         }
 
         if option.flags().contains(MMapFlags::MAP_ANONYMOUS) {
@@ -119,11 +118,9 @@ fn do_sys_mmap(
                 };
                 options = options.vmo(shared_vmo);
             }
-
-            options.build()?
         } else {
             let mut file_table = ctx.thread_local.borrow_file_table_mut();
-            let file = get_file_fast!(&mut file_table, raw_fd.try_into()?).into_owned();
+            let file = get_file_fast!(&mut file_table, raw_fd.try_into()?);
 
             let access_mode = file.access_mode();
             if vm_perms.contains(VmPerms::READ) && !access_mode.is_readable() {
@@ -138,13 +135,15 @@ fn do_sys_mmap(
 
             options = options
                 .may_perms(vm_may_perms)
-                .mappable(&file)?
+                .mappable(file.into_owned())?
                 .vmo_offset(offset)
                 .handle_page_faults_around();
-
-            options.build()?
         }
+
+        options
     };
+
+    let map_addr = vm_map_options.build()?;
 
     Ok(map_addr)
 }

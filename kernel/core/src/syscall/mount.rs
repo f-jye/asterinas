@@ -125,14 +125,14 @@ fn do_bind_mount(
             .lookup(&fs_path)?
     };
 
-    src_path.bind_mount_to(dst_path, recursive, ctx)?;
+    src_path.bind_mount_to(&dst_path, recursive, ctx)?;
     Ok(())
 }
 
 // All valid propagation flags.
-const MS_PROPAGATION: MountFlags = MountFlags::MS_PRIVATE
+const MS_PROPAGATION: MountFlags = MountFlags::MS_SHARED
+    .union(MountFlags::MS_PRIVATE)
     .union(MountFlags::MS_SLAVE)
-    .union(MountFlags::MS_SHARED)
     .union(MountFlags::MS_UNBINDABLE);
 
 fn do_change_type(target_path: Path, flags: MountFlags, ctx: &Context) -> Result<()> {
@@ -180,7 +180,7 @@ fn do_move_mount_old(src_name_addr: Vaddr, dst_path: Path, ctx: &Context) -> Res
             .lookup(&fs_path)?
     };
 
-    src_path.move_mount_to(dst_path, ctx)?;
+    src_path.move_mount_to(&dst_path, ctx)?;
 
     Ok(())
 }

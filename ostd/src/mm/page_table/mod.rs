@@ -178,16 +178,6 @@ impl<C: PageTableConfig> PagingConstsTrait for C {
     const VA_SIGN_EXT: bool = C::C::VA_SIGN_EXT;
 }
 
-/// Returns the highest supported page level whose size fits in `len` bytes, or level 1.
-///
-/// This bounds the level of any page in the range, regardless of alignment.
-pub(crate) fn max_page_level<C: PagingConstsTrait>(len: usize) -> PagingLevel {
-    (1..=C::HIGHEST_TRANSLATION_LEVEL)
-        .rev()
-        .find(|&level| page_size::<C>(level) <= len)
-        .unwrap_or(1)
-}
-
 /// Splits the address range into largest page table items.
 ///
 /// Each of the returned items is a tuple of the physical address and the
@@ -323,15 +313,14 @@ const fn pte_index_bit_offset<C: PagingConstsTrait>(level: PagingLevel) -> usize
 }
 
 /// A handle to a page table.
-///
 /// A page table can track the lifetime of the mapped physical pages.
 #[derive(Debug)]
-pub(crate) struct PageTable<C: PageTableConfig> {
+pub struct PageTable<C: PageTableConfig> {
     root: PageTableNode<C>,
 }
 
 impl PageTable<UserPtConfig> {
-    pub(in crate::mm) fn activate(&self) {
+    pub fn activate(&self) {
         // SAFETY: The user mode page table is safe to activate since the kernel
         // mappings are shared.
         unsafe {
@@ -341,8 +330,8 @@ impl PageTable<UserPtConfig> {
 }
 
 impl PageTable<KernelPtConfig> {
-    /// Creates a new kernel page table.
-    pub(in crate::mm) fn new_kernel_page_table() -> Self {
+    /// Create a new kernel page table.
+    pub(crate) fn new_kernel_page_table() -> Self {
         let kpt = Self::empty();
 
         // Make shared the page tables mapped by the root table in the kernel space.
@@ -359,7 +348,7 @@ impl PageTable<KernelPtConfig> {
         kpt
     }
 
-    /// Creates a new user page table.
+    /// Create a new user page table.
     ///
     /// This should be the only way to create the user page table, that is to
     /// duplicate the kernel page table with all the kernel mappings shared.
@@ -408,10 +397,10 @@ impl PageTable<KernelPtConfig> {
 }
 
 impl<C: PageTableConfig> PageTable<C> {
-    /// Creates a new empty page table.
+    /// Create a new empty page table.
     ///
     /// Useful for the IOMMU page tables only.
-    pub(crate) fn empty() -> Self {
+    pub fn empty() -> Self {
         PageTable {
             root: PageTableNode::<C>::alloc(C::NR_LEVELS),
         }
@@ -422,82 +411,62 @@ impl<C: PageTableConfig> PageTable<C> {
         unsafe { self.root.first_activate() };
     }
 
-    /// Returns the physical address of the root page table.
+    /// The physical address of the root page table.
     ///
     /// Obtaining the physical address of the root page table is safe, however, using it or
     /// providing it to the hardware will be unsafe since the page table node may be dropped,
     /// resulting in UAF.
-    pub(crate) fn root_paddr(&self) -> Paddr {
+    pub fn root_paddr(&self) -> Paddr {
         self.root.paddr()
     }
 
-    /// Queries about the mapping of a single byte at the given virtual address.
+    /// Query about the mapping of a single byte at the given virtual address.
     ///
     /// Note that this function may fail reflect an accurate result if there are
     /// cursors concurrently accessing the same virtual address range, just like what
     /// happens for the hardware MMU walk.
     #[cfg(ktest)]
-    pub(in crate::mm) fn page_walk(&self, vaddr: Vaddr) -> Option<(Paddr, PageProperty)> {
+    pub fn page_walk(&self, vaddr: Vaddr) -> Option<(Paddr, PageProperty)> {
         // SAFETY: The root node is a valid page table node so the address is valid.
         unsafe { page_walk::<C>(self.root_paddr(), vaddr) }
     }
 
-    /// Creates a cursor exclusively accessing the virtual address range for mapping.
+    /// Create a new cursor exclusively accessing the virtual address range for mapping.
     ///
-    /// Uses fine-grained locking. For huge pages, use [`Self::cursor_mut_with_min_level`].
-    /// If another cursor is already accessing the range, waits until it is dropped.
-    pub(crate) fn cursor_mut<'rcu, G: AsAtomicModeGuard>(
+    /// If another cursor is already accessing the range, the new cursor may wait until the
+    /// previous cursor is dropped.
+    pub fn cursor_mut<'rcu, G: AsAtomicModeGuard>(
         &'rcu self,
         guard: &'rcu G,
         va: &Range<Vaddr>,
     ) -> Result<CursorMut<'rcu, C>, PageTableError> {
-        self.cursor_mut_with_min_level(guard, va, 1)
+        CursorMut::new(self, guard.as_atomic_mode_guard(), va)
     }
 
-    /// Creates a mapping cursor that locks at `min_level` or higher.
-    ///
-    /// Use the highest page level to be mapped. The range or existing mappings may
-    /// require a higher lock level. Higher levels can serialize disjoint accesses.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `min_level` is outside `1..=C::NR_LEVELS`.
-    pub(crate) fn cursor_mut_with_min_level<'rcu, G: AsAtomicModeGuard>(
-        &'rcu self,
-        guard: &'rcu G,
-        va: &Range<Vaddr>,
-        min_level: PagingLevel,
-    ) -> Result<CursorMut<'rcu, C>, PageTableError> {
-        CursorMut::new(self, guard.as_atomic_mode_guard(), va, min_level)
-    }
-
-    /// Creates a new cursor exclusively accessing the virtual address range for querying.
+    /// Create a new cursor exclusively accessing the virtual address range for querying.
     ///
     /// If another cursor is already accessing the range, the new cursor may wait until the
     /// previous cursor is dropped. The modification to the mapping by the cursor may also
     /// block or be overridden by the mapping of another cursor.
-    pub(in crate::mm) fn cursor<'rcu, G: AsAtomicModeGuard>(
+    pub fn cursor<'rcu, G: AsAtomicModeGuard>(
         &'rcu self,
         guard: &'rcu G,
         va: &Range<Vaddr>,
     ) -> Result<Cursor<'rcu, C>, PageTableError> {
-        Cursor::new(self, guard.as_atomic_mode_guard(), va, 1)
+        Cursor::new(self, guard.as_atomic_mode_guard(), va)
     }
 
-    /// Creates a new reference to the same page table.
-    ///
-    /// # Safety
-    ///
+    /// Create a new reference to the same page table.
     /// The caller must ensure that the kernel page table is not copied.
     /// This is only useful for IOMMU page tables. Think twice before using it in other cases.
-    pub(crate) unsafe fn shallow_copy(&self) -> Self {
+    pub unsafe fn shallow_copy(&self) -> Self {
         PageTable {
             root: self.root.clone(),
         }
     }
 }
 
-/// Performs a software emulation of the MMU address translation process.
+/// A software emulation of the MMU address translation process.
 ///
 /// This method returns the physical address of the given virtual address and
 /// the page property if a valid mapping exists for the given virtual address.
@@ -621,7 +590,7 @@ pub(crate) unsafe trait PteTrait:
 /// # Safety
 ///
 /// The safety preconditions are same as those of [`AtomicUsize::from_ptr`].
-unsafe fn load_pte<E: PteTrait>(ptr: *mut E, ordering: Ordering) -> E {
+pub unsafe fn load_pte<E: PteTrait>(ptr: *mut E, ordering: Ordering) -> E {
     // SAFETY: The safety is upheld by the caller.
     let atomic = unsafe { AtomicUsize::from_ptr(ptr.cast()) };
     let pte_raw = atomic.load(ordering);
@@ -633,7 +602,7 @@ unsafe fn load_pte<E: PteTrait>(ptr: *mut E, ordering: Ordering) -> E {
 /// # Safety
 ///
 /// The safety preconditions are same as those of [`AtomicUsize::from_ptr`].
-unsafe fn store_pte<E: PteTrait>(ptr: *mut E, new_val: E, ordering: Ordering) {
+pub unsafe fn store_pte<E: PteTrait>(ptr: *mut E, new_val: E, ordering: Ordering) {
     let new_raw = new_val.as_usize();
     // SAFETY: The safety is upheld by the caller.
     let atomic = unsafe { AtomicUsize::from_ptr(ptr.cast()) };

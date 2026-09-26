@@ -9,6 +9,8 @@ mod pty;
 pub mod registry;
 pub(crate) mod tty;
 
+pub use fb::simple_framebuffer_platform_device;
+
 use device_id::DeviceId;
 pub(crate) use mem::{getrandom, geturandom};
 pub(crate) use pty::{PtyMaster, PtySlave, new_pty_pair};

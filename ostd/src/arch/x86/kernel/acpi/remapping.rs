@@ -19,20 +19,20 @@ use ostd_pod::Pod;
 /// A DRHD structure uniquely represents a remapping hardware unit present in the platform.
 /// There must be at least one instance of this structure for each PCI segment in the platform.
 #[derive(Clone, Debug)]
-pub(in crate::arch) struct Drhd {
+pub struct Drhd {
     header: DrhdHeader,
     device_scopes: Vec<DeviceScope>,
 }
 
 impl Drhd {
-    pub(in crate::arch) fn register_base_addr(&self) -> u64 {
+    pub fn register_base_addr(&self) -> u64 {
         self.header.register_base_addr
     }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod)]
-struct DrhdHeader {
+pub struct DrhdHeader {
     typ: u16,
     length: u16,
     flags: u8,
@@ -47,14 +47,14 @@ struct DrhdHeader {
 /// It may report each such reserved memory region through the RMRR structures, along
 /// with the devices that requires access to the specified reserved memory region.
 #[derive(Clone, Debug)]
-pub(in crate::arch) struct Rmrr {
+pub struct Rmrr {
     header: RmrrHeader,
     device_scopes: Vec<DeviceScope>,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod)]
-struct RmrrHeader {
+pub struct RmrrHeader {
     typ: u16,
     length: u16,
     reserved: u16,
@@ -68,14 +68,14 @@ struct RmrrHeader {
 /// This structure is applicable only for platforms supporting Device-TLBs as reported through the
 /// Extended Capability Register.
 #[derive(Clone, Debug)]
-pub(in crate::arch) struct Atsr {
+pub struct Atsr {
     header: AtsrHeader,
     device_scopes: Vec<DeviceScope>,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod)]
-struct AtsrHeader {
+pub struct AtsrHeader {
     typ: u16,
     length: u16,
     flags: u8,
@@ -92,7 +92,7 @@ struct AtsrHeader {
 #[padding_struct]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod)]
-pub(in crate::arch) struct Rhsa {
+pub struct Rhsa {
     typ: u16,
     length: u16,
     flags: u32,
@@ -105,14 +105,14 @@ pub(in crate::arch) struct Rhsa {
 /// An ANDD structure uniquely represents an ACPI name-space
 /// enumerated device capable of issuing DMA requests in the platform.
 #[derive(Clone, Debug)]
-pub(in crate::arch) struct Andd {
+pub struct Andd {
     header: AnddHeader,
     acpi_object_name: String,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod)]
-struct AnddHeader {
+pub struct AnddHeader {
     typ: u16,
     length: u16,
     reserved: [u8; 3],
@@ -124,14 +124,14 @@ struct AnddHeader {
 /// The SATC reporting structure identifies devices that have address translation cache (ATC),
 /// as defined by the PCI Express Base Specification.
 #[derive(Clone, Debug)]
-pub(in crate::arch) struct Satc {
+pub struct Satc {
     header: SatcHeader,
     device_scopes: Vec<DeviceScope>,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod)]
-struct SatcHeader {
+pub struct SatcHeader {
     typ: u16,
     length: u16,
     flags: u8,
@@ -145,14 +145,14 @@ struct SatcHeader {
 /// properties and that may put restrictions on how system software must configure remapping
 /// structures that govern such devices in a platform where remapping hardware is enabled.
 #[derive(Clone, Debug)]
-pub(in crate::arch) struct Sidp {
+pub struct Sidp {
     header: SidpHeader,
     device_scopes: Vec<DeviceScope>,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod)]
-struct SidpHeader {
+pub struct SidpHeader {
     typ: u16,
     length: u16,
     reserved: u16,
@@ -162,14 +162,14 @@ struct SidpHeader {
 /// The Device Scope Structure is made up of Device Scope Entries. Each Device Scope Entry may be
 /// used to indicate a PCI endpoint device
 #[derive(Clone, Debug)]
-struct DeviceScope {
+pub struct DeviceScope {
     header: DeviceScopeHeader,
     path: Vec<(u8, u8)>,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod)]
-struct DeviceScopeHeader {
+pub struct DeviceScopeHeader {
     typ: u8,
     length: u8,
     flags: u8,
@@ -190,7 +190,7 @@ macro_rules! impl_from_bytes {
                 stringify!($struct),
                 "`].",
             )]
-            pub(super) fn from_bytes(bytes: &[u8]) -> Self {
+            pub fn from_bytes(bytes: &[u8]) -> Self {
                 let header = $header_struct::from_first_bytes(bytes);
                 debug_assert_eq!(header.length as usize, bytes.len());
 
@@ -249,7 +249,7 @@ impl Rhsa {
     /// # Panics
     ///
     /// This method may panic if the bytes do not represent a valid [`Rhsa`].
-    pub(super) fn from_bytes(bytes: &[u8]) -> Self {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
         let val = <Self as Pod>::from_first_bytes(bytes);
         debug_assert_eq!(val.length as usize, bytes.len());
 
@@ -263,7 +263,7 @@ impl Andd {
     /// # Panics
     ///
     /// This method may panic if the bytes do not represent a valid [`Andd`].
-    pub(super) fn from_bytes(bytes: &[u8]) -> Self {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
         let header = AnddHeader::from_first_bytes(bytes);
         debug_assert_eq!(header.length as usize, bytes.len());
 

@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use alloc::{boxed::Box, collections::BTreeMap, string::String, sync::Arc, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::BTreeMap,
+    format,
+    string::String,
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 use core::{
     fmt::Debug,
     sync::atomic::{AtomicU32, Ordering},
 };
 
 use aster_block::{
-    BlockDeviceMeta, PartitionManager,
+    BlockDeviceMeta, EXTENDED_DEVICE_ID_ALLOCATOR, PartitionInfo, PartitionNode,
     bio::{BioEnqueueError, BioStatus, BioType, SubmittedBio, bio_segment_pool_init},
     request_queue::{BioRequest, BioRequestSingleQueue},
 };
@@ -27,11 +34,15 @@ use crate::{
         VirtioDeviceError,
         block::{ReqType, RespStatus},
     },
-    dma_buf::DmaBuf,
     id_alloc::SyncIdAlloc,
     queue::VirtQueue,
     transport::{ConfigManager, DeviceTransport},
 };
+
+/// The number of minor device numbers allocated for each virtio disk,
+/// including the whole disk and its partitions. If a disk has more than
+/// 16 partitions, then allocate a device ID via `EXTENDED_DEVICE_ID_ALLOCATOR`.
+const VIRTIO_DEVICE_MINORS: u32 = 16;
 
 /// The number of virtio block devices, used to assign minor device numbers.
 static NR_BLOCK_DEVICE: AtomicU32 = AtomicU32::new(0);
@@ -43,7 +54,8 @@ pub struct BlockDevice {
     queue: BioRequestSingleQueue,
     id: DeviceId,
     name: String,
-    partition_manager: PartitionManager,
+    partitions: SpinLock<Option<Vec<Arc<PartitionNode>>>>,
+    weak_self: Weak<Self>,
 }
 
 impl BlockDevice {
@@ -76,11 +88,11 @@ impl BlockDevice {
         let index = NR_BLOCK_DEVICE.fetch_add(1, Ordering::Relaxed);
         let id = DeviceId::new(
             VIRTIO_BLOCK_MAJOR_ID.get().unwrap().get(),
-            MinorId::new(index * aster_block::DEVICE_MINORS),
+            MinorId::new(index * VIRTIO_DEVICE_MINORS),
         );
         let name = Self::formatted_device_name(index);
 
-        let block_device = Arc::new(BlockDevice {
+        let block_device = Arc::new_cyclic(|weak_self| BlockDevice {
             device,
             // Each bio request includes an additional 1 request and 1 response descriptor,
             // therefore this upper bound is set to (QUEUE_SIZE - 2).
@@ -89,7 +101,8 @@ impl BlockDevice {
             ),
             id,
             name,
-            partition_manager: PartitionManager::new(),
+            partitions: SpinLock::new(None),
+            weak_self: weak_self.clone(),
         });
 
         aster_block::register(block_device).unwrap();
@@ -136,8 +149,48 @@ impl aster_block::BlockDevice for BlockDevice {
         self.id
     }
 
-    fn partition_manager(&self) -> Option<&PartitionManager> {
-        Some(&self.partition_manager)
+    fn set_partitions(&self, infos: Vec<Option<PartitionInfo>>) {
+        let mut partitions = self.partitions.lock();
+        if let Some(old_partitions) = partitions.take() {
+            for partition in old_partitions {
+                let _ = aster_block::unregister(partition.id());
+            }
+        }
+
+        let mut new_partitions = Vec::new();
+        for (index, info_opt) in infos.iter().enumerate() {
+            let Some(info) = info_opt else {
+                continue;
+            };
+
+            let index = index as u32 + 1;
+            let id = if index < VIRTIO_DEVICE_MINORS {
+                DeviceId::new(self.id.major(), MinorId::new(self.id.minor().get() + index))
+            } else {
+                EXTENDED_DEVICE_ID_ALLOCATOR.get().unwrap().allocate()
+            };
+            let name = format!("{}{}", self.name(), index);
+            let device = self.weak_self.upgrade().unwrap();
+
+            let partition = Arc::new(PartitionNode::new(id, name, device, *info));
+            new_partitions.push(partition);
+        }
+
+        for partition in new_partitions.iter() {
+            let _ = aster_block::register(partition.clone());
+        }
+
+        *partitions = Some(new_partitions);
+    }
+
+    fn partitions(&self) -> Option<Vec<Arc<dyn aster_block::BlockDevice>>> {
+        let partitions = self.partitions.lock();
+        let devices = partitions
+            .as_ref()?
+            .iter()
+            .map(|p| p.clone() as Arc<dyn aster_block::BlockDevice>)
+            .collect();
+        Some(devices)
     }
 }
 
@@ -270,13 +323,12 @@ impl DeviceInner {
                 complete_request
                     .bio_request
                     .bios()
-                    .flat_map(|bio| bio.segments().iter().map(|segment| segment.dma_slice()))
-                    .for_each(|dma_slice| {
-                        dma_slice
-                            .mem_obj()
-                            .sync_from_device(dma_slice.offset().clone())
-                            .unwrap()
-                    });
+                    .flat_map(|bio| {
+                        bio.segments()
+                            .iter()
+                            .map(|segment| segment.inner_dma_slice())
+                    })
+                    .for_each(|dma_slice| dma_slice.sync_from_device().unwrap());
             }
 
             // Completes the bio request
@@ -319,11 +371,11 @@ impl DeviceInner {
         };
 
         let outputs = {
-            let mut outputs: Vec<&dyn DmaBuf> = Vec::with_capacity(bio_request.num_segments() + 1);
+            let mut outputs: Vec<&Slice<_>> = Vec::with_capacity(bio_request.num_segments() + 1);
             let dma_slices_iter = bio_request.bios().flat_map(|bio| {
                 bio.segments()
                     .iter()
-                    .map(|segment| segment.dma_slice() as &dyn DmaBuf)
+                    .map(|segment| segment.inner_dma_slice())
             });
             outputs.extend(dma_slices_iter);
             outputs.push(&resp_slice);
@@ -387,17 +439,16 @@ impl DeviceInner {
         };
 
         let inputs = {
-            let mut inputs: Vec<&dyn DmaBuf> = Vec::with_capacity(bio_request.num_segments() + 1);
+            let mut inputs: Vec<&Slice<_>> = Vec::with_capacity(bio_request.num_segments() + 1);
             inputs.push(&req_slice);
-            for dma_slice in bio_request
-                .bios()
-                .flat_map(|bio| bio.segments().iter().map(|segment| segment.dma_slice()))
-            {
-                dma_slice
-                    .mem_obj()
-                    .sync_to_device(dma_slice.offset().clone())
-                    .unwrap();
-                inputs.push(dma_slice as &dyn DmaBuf);
+            let dma_slices_iter = bio_request.bios().flat_map(|bio| {
+                bio.segments()
+                    .iter()
+                    .map(|segment| segment.inner_dma_slice())
+            });
+            for dma_slice in dma_slices_iter {
+                dma_slice.sync_to_device().unwrap();
+                inputs.push(dma_slice);
             }
             inputs
         };
@@ -493,7 +544,7 @@ struct SubmittedRequest {
 }
 
 impl SubmittedRequest {
-    fn new(id: u16, bio_request: BioRequest) -> Self {
+    pub fn new(id: u16, bio_request: BioRequest) -> Self {
         Self { id, bio_request }
     }
 }
@@ -502,9 +553,9 @@ impl SubmittedRequest {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod)]
 struct BlockReq {
-    type_: u32,
-    reserved: u32,
-    sector: u64,
+    pub type_: u32,
+    pub reserved: u32,
+    pub sector: u64,
 }
 
 const REQ_SIZE: usize = size_of::<BlockReq>();

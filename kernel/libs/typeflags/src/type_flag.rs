@@ -9,7 +9,7 @@ use syn::{
 };
 
 /// The content inside typeflag macro
-pub(crate) struct TypeFlagDef {
+pub struct TypeFlagDef {
     attributes: Vec<Attribute>,
     ident: Ident,
     vis: Visibility,
@@ -19,7 +19,7 @@ pub(crate) struct TypeFlagDef {
 
 /// struct item inside typeflag macro
 #[derive(Clone)]
-pub(crate) struct TypeFlagItem {
+pub struct TypeFlagItem {
     attributes: Vec<Attribute>,
     vis: Visibility,
     ident: Ident,
@@ -71,7 +71,7 @@ impl Parse for TypeFlagItem {
 
 impl TypeFlagDef {
     /// tokens to define the trait
-    pub(crate) fn trait_def_tokens(&self) -> TokenStream {
+    pub fn trait_def_tokens(&self) -> TokenStream {
         let attributes = self.attributes.clone();
         let vis = self.vis.clone();
         let ident = self.ident.clone();
@@ -88,7 +88,7 @@ impl TypeFlagDef {
     }
 
     /// tokens to define all structs
-    pub(crate) fn items_def_tokens(&self) -> Vec<TokenStream> {
+    pub fn items_def_tokens(&self) -> Vec<TokenStream> {
         self.items
             .iter()
             .map(|type_flag_item| type_flag_item.item_def_tokens())
@@ -96,27 +96,27 @@ impl TypeFlagDef {
     }
 
     /// return the items iter
-    pub(crate) fn items_iter(&self) -> syn::punctuated::Iter<'_, TypeFlagItem> {
+    pub fn items_iter(&self) -> syn::punctuated::Iter<'_, TypeFlagItem> {
         self.items.iter()
     }
 
     /// the number of items
-    pub(crate) fn item_num(&self) -> usize {
+    pub fn item_num(&self) -> usize {
         self.items.len()
     }
 
     /// get item at specific position
-    pub(crate) fn get_item(&self, index: usize) -> Option<TypeFlagItem> {
+    pub fn get_item(&self, index: usize) -> Option<TypeFlagItem> {
         self.items.iter().nth(index).cloned()
     }
 
     /// the trait ident
-    pub(crate) fn trait_ident(&self) -> Ident {
+    pub fn trait_ident(&self) -> Ident {
         self.ident.clone()
     }
 
     /// the val type
-    pub(crate) fn val_type(&self) -> Type {
+    pub fn val_type(&self) -> Type {
         self.type_.clone()
     }
 }
@@ -135,12 +135,12 @@ impl TypeFlagItem {
     }
 
     /// the item's ident
-    pub(crate) fn ident(&self) -> Ident {
+    pub fn ident(&self) -> Ident {
         self.ident.clone()
     }
 
     /// the expression of the items's value
-    pub(crate) fn val(&self) -> Expr {
+    pub fn val(&self) -> Expr {
         self.value.clone()
     }
 }

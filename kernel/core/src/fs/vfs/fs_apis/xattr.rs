@@ -90,7 +90,7 @@ pub(crate) enum XattrNamespace {
 ///
 /// For example, "user.foo" is a valid xattr name, and its namespace
 /// is `XattrNamespace::User`.
-#[derive(Debug, Clone, Copy, Hash)]
+#[derive(Debug, Hash)]
 pub(crate) struct XattrName<'a> {
     namespace: XattrNamespace,
     full_name: &'a str,

@@ -108,34 +108,34 @@ impl Hpet {
     }
 
     #[expect(dead_code)]
-    fn hardware_rev(&self) -> u8 {
+    pub fn hardware_rev(&self) -> u8 {
         (self.information_register.as_ptr().read() & 0xFF) as u8
     }
 
     #[expect(dead_code)]
-    fn num_comparators(&self) -> u8 {
+    pub fn num_comparators(&self) -> u8 {
         ((self.information_register.as_ptr().read() & 0x1F00) >> 8) as u8 + 1
     }
 
     #[expect(dead_code)]
-    fn main_counter_is_64bits(&self) -> bool {
+    pub fn main_counter_is_64bits(&self) -> bool {
         (self.information_register.as_ptr().read() & 0x2000) != 0
     }
 
     #[expect(dead_code)]
-    fn legacy_irq_capable(&self) -> bool {
+    pub fn legacy_irq_capable(&self) -> bool {
         (self.information_register.as_ptr().read() & 0x8000) != 0
     }
 
     #[expect(dead_code)]
-    fn pci_vendor_id(&self) -> u16 {
+    pub fn pci_vendor_id(&self) -> u16 {
         ((self.information_register.as_ptr().read() & 0xFFFF_0000) >> 16) as u16
     }
 }
 
 /// HPET init, need to init IOAPIC before init this function
 #[expect(dead_code)]
-pub(super) fn init() -> Result<(), AcpiError> {
+pub fn init() -> Result<(), AcpiError> {
     let tables = get_acpi_tables().unwrap();
 
     let hpet_info = HpetInfo::new(tables)?;

@@ -22,7 +22,7 @@ pub(super) struct Compactor<K, V> {
 
 impl<K: RecordKey<K>, V: RecordValue> Compactor<K, V> {
     /// Create a new `Compactor` instance.
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             handle: Mutex::new(None),
             phantom: PhantomData,
@@ -30,14 +30,14 @@ impl<K: RecordKey<K>, V: RecordValue> Compactor<K, V> {
     }
 
     /// Record current compaction thread handle.
-    pub(super) fn record_handle(&self, handle: JoinHandle<Result<()>>) {
+    pub fn record_handle(&self, handle: JoinHandle<Result<()>>) {
         let mut handle_opt = self.handle.lock();
         assert!(handle_opt.is_none());
         let _ = handle_opt.insert(handle);
     }
 
     /// Wait until the compaction is finished.
-    pub(super) fn wait_compaction(&self) -> Result<()> {
+    pub fn wait_compaction(&self) -> Result<()> {
         if let Some(handle) = self.handle.lock().take() {
             handle.join().unwrap()
         } else {
@@ -50,7 +50,7 @@ impl<K: RecordKey<K>, V: RecordValue> Compactor<K, V> {
     /// # Panics
     ///
     /// This method must be called within a TX. Otherwise, this method panics.
-    pub(super) fn compact_records_and_build_ssts<D: BlockSet + 'static>(
+    pub fn compact_records_and_build_ssts<D: BlockSet + 'static>(
         upper_records: impl Iterator<Item = (K, ValueEx<V>)>,
         lower_records: impl Iterator<Item = (K, ValueEx<V>)>,
         tx_log_store: &Arc<TxLogStore<D>>,

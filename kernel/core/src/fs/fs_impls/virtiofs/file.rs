@@ -2,7 +2,7 @@
 
 //! Open regular-file handles for `virtiofs`.
 
-use aster_fuse::{FsyncFlags, FuseOpenFlags, ops::init::FuseInitFlags2};
+use aster_fuse::{FsyncFlags, FuseOpenFlags};
 use ostd::warn;
 
 use super::{
@@ -12,13 +12,12 @@ use super::{
 use crate::{
     events::IoEvents,
     fs::{
-        file::{MappableObject, PerOpenFileOps, StatusFlags, SyncMode},
+        file::{PerOpenFileOps, StatusFlags, SyncMode},
         vfs::inode::{FileOps, Inode},
     },
     prelude::*,
     process::signal::{PollHandle, Pollable},
     thread::work_queue::{self, WorkPriority},
-    vm::vmar::FileMmapRequest,
 };
 
 /// A per-open file object backed by a FUSE file handle.
@@ -55,14 +54,11 @@ impl Drop for VirtioFsFile {
             return;
         }
 
-        let fs = self.inode.fs_ref();
         let inode = self.inode.clone();
         let open_handle = self.open_handle.clone();
 
         work_queue::submit_work_func(
             move || {
-                // Keep the filesystem alive until the deferred flush completes.
-                let _fs_guard = &fs;
                 if let Err(err) = inode.invalidate_whole_page_cache() {
                     warn!(
                         "virtiofs flush before release failed for inode {:?}: {:?}",
@@ -139,32 +135,6 @@ impl FileOps for VirtioFsFile {
 }
 
 impl PerOpenFileOps for VirtioFsFile {
-    fn mappable(&self, request: FileMmapRequest) -> Result<MappableObject<'_>> {
-        // `FuseOpenFlags::FOPEN_DIRECT_IO` permits private mappings. Shared
-        // mappings additionally require `FuseInitFlags2::DIRECT_IO_ALLOW_MMAP`
-        // to have been negotiated.
-        let is_mmap_allowed = !self
-            .open_handle
-            .open_flags()
-            .contains(FuseOpenFlags::FOPEN_DIRECT_IO)
-            || !request.is_shared()
-            || self
-                .inode
-                .fs_ref()
-                .session()
-                .negotiated_flags2()
-                .contains(FuseInitFlags2::DIRECT_IO_ALLOW_MMAP);
-
-        if !is_mmap_allowed {
-            return_errno_with_message!(Errno::ENODEV, "the file is not mappable");
-        }
-
-        self.inode
-            .page_cache()
-            .map(MappableObject::Vmo)
-            .ok_or_else(|| Error::with_message(Errno::ENODEV, "the file is not mappable"))
-    }
-
     fn check_seekable(&self) -> Result<()> {
         if self
             .open_handle
@@ -211,7 +181,6 @@ impl PerOpenFileOps for VirtioFsFile {
 pub(super) enum CachePolicy {
     /// I/O goes through the page cache.
     Cached,
-    /// I/O bypasses the page cache and hits the FUSE server directly, due to
-    /// either `O_DIRECT` or `FOPEN_DIRECT_IO`.
+    /// I/O bypasses the page cache and hits the FUSE server directly.
     Direct,
 }

@@ -13,12 +13,12 @@ use super::{
 };
 
 #[derive(Debug)]
-pub(crate) struct VirtioMmioDriver {
+pub struct VirtioMmioDriver {
     devices: SpinLock<Vec<VirtioMmioTransport>>,
 }
 
 impl VirtioMmioDriver {
-    pub(crate) fn pop_device_transport(&self) -> Option<VirtioMmioTransport> {
+    pub fn pop_device_transport(&self) -> Option<VirtioMmioTransport> {
         self.devices.lock().pop()
     }
 

@@ -28,12 +28,12 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub(super) struct VirtioMmioDevice {
+pub struct VirtioMmioDevice {
     device_id: u32,
 }
 
 #[derive(Debug)]
-pub(crate) struct VirtioMmioTransport {
+pub struct VirtioMmioTransport {
     layout: SafePtr<VirtioMmioLayout, IoMem>,
     device: Arc<VirtioMmioDevice>,
     common_device: MmioCommonDevice,

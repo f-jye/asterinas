@@ -117,9 +117,7 @@ impl FuseOperation for WriteOperation {
     }
 
     fn reply_expectation(&self) -> ReplyExpectation {
-        ReplyExpectation::WritePayload {
-            requested_size: self.write_req.size() as usize,
-        }
+        ReplyExpectation::payload(size_of::<WriteReply>())
     }
 
     fn parse_reply(

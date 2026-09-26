@@ -246,6 +246,60 @@ pub(super) mod abi {
         pub pad: u32,
         pub lessees_ptr: u64,
     }
+
+    /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L796>.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Pod)]
+    pub struct ModeGetPlaneRes {
+        pub plane_id_ptr: u64,
+        pub count_planes: u32,
+        pub __pad: u32,
+    }
+
+    /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L456>.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Pod)]
+    pub struct ModeCrtcLut {
+        pub crtc_id: u32,
+        pub gamma_size: u32,
+        pub red_ptr: u64,
+        pub green_ptr: u64,
+        pub blue_ptr: u64,
+    }
+
+    /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L319>.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Pod)]
+    pub struct ModeGetPlane {
+        pub plane_id: u32,
+        pub crtc_id: u32,
+        pub fb_id: u32,
+        pub possible_crtcs: u32,
+        pub gamma_size: u32,
+        pub count_format_types: u32,
+        pub format_type_ptr: u64,
+    }
+
+    /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L580>.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Pod)]
+    pub struct ModeGetProperty {
+        pub values_ptr: u64,
+        pub enum_blob_ptr: u64,
+        pub count_values: u32,
+        pub count_enum_blobs: u32,
+        pub prop_id: u32,
+        pub flags: u32,
+        pub name: [u8; 32],
+    }
+
+    /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L544>.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Pod)]
+    pub struct ModePropEnum {
+        pub value: u64,
+        pub name: [u8; 32],
+    }
 }
 
 impl DrmFile {
@@ -302,9 +356,14 @@ impl DrmFile {
         let Some(buffer) = gem.buffer(fb.handle) else {
             return_errno_with_message!(Errno::ENOENT, "no such dumb buffer");
         };
-        if fb.width != buffer.width || fb.height != buffer.height || fb.pitch != buffer.pitch {
-            return_errno_with_message!(Errno::EINVAL, "the framebuffer mismatches its buffer");
+        // Linux does not require an FB to cover its backing buffer exactly:
+        // user space (e.g. mesa's aligned allocations) may submit smaller
+        // framebuffers. Only require the pitch to cover the width.
+        let bytes_per_pixel = (fb.bpp as usize).div_ceil(8);
+        if fb.width as usize * bytes_per_pixel > fb.pitch as usize {
+            return_errno_with_message!(Errno::EINVAL, "the framebuffer pitch is too small");
         }
+        let _ = buffer;
 
         let kms = self.minor().registered_device().kms().lock();
         let fb_id = kms.alloc_fb_id();
@@ -464,6 +523,7 @@ impl DrmFile {
             (24, 32) => FORMAT_XRGB8888,
             (32, 32) => FORMAT_ARGB8888,
             _ => {
+                ostd::warn!("drm: addfb unsupported format depth={} bpp={}", args.depth, args.bpp);
                 return_errno_with_message!(Errno::EINVAL, "the framebuffer format is unsupported")
             }
         };
@@ -486,6 +546,7 @@ impl DrmFile {
         let mut args: abi::ModeFbCmd2 = cmd.read()?;
 
         if args.flags != 0 {
+            ostd::warn!("drm: addfb2 flags={:#x}", args.flags);
             return_errno_with_message!(Errno::EINVAL, "framebuffer flags are unsupported");
         }
         // Only single-plane, linearly addressed framebuffers are supported.
@@ -493,6 +554,7 @@ impl DrmFile {
             || args.offsets[0] != 0
             || args.offsets[1..].iter().any(|offset| *offset != 0)
         {
+            ostd::warn!("drm: addfb2 multi-plane");
             return_errno_with_message!(Errno::EINVAL, "multi-plane framebuffers are unsupported");
         }
         // Only the first plane carries a modifier for our single-plane
@@ -500,6 +562,7 @@ impl DrmFile {
         // fills them with INVALID.
         let modifier = args.modifier[0];
         if modifier != MODIFIER_LINEAR && modifier != MODIFIER_INVALID {
+            ostd::warn!("drm: addfb2 modifier={:#x}", modifier);
             return_errno_with_message!(Errno::EINVAL, "the framebuffer modifiers are unsupported");
         }
         let format = match args.pixel_format {
@@ -636,13 +699,26 @@ impl DrmFile {
     pub(super) fn mode_obj_get_props(&self, cmd: DrmIoctlObjGetProps) -> Result<i32> {
         let mut args: abi::ModeObjGetProps = cmd.read()?;
 
-        // No properties are exposed: user space sees a connector without
-        // EDID or DPMS properties, which the modesetting driver tolerates.
+        // `DRM_MODE_OBJECT_PLANE`: expose the plane's `type` enum property,
+        // whose value identifies it as the primary plane. Everything else
+        // reports no properties, which the modesetting drivers tolerate.
         // Reporting success (instead of ENOTTY) matters because libdrm's
         // `drmModeObjectGetProperties` returns NULL on failure and the
-        // driver dereferences it unchecked.
-        args.count_props = 0;
-        cmd.write(&args)?;
+        // drivers dereference it unchecked.
+        const DRM_MODE_OBJECT_PLANE: u32 = 0xeeee_eeee;
+        if args.obj_type == DRM_MODE_OBJECT_PLANE && args.obj_id == Self::PLANE_ID {
+            args.count_props = 1;
+            cmd.write(&args)?;
+            if args.props_ptr != 0 {
+                write_user_value(args.props_ptr as usize, &Self::PLANE_TYPE_PROP_ID)?;
+            }
+            if args.prop_values_ptr != 0 {
+                write_user_value(args.prop_values_ptr as usize, &1u64)?;
+            }
+        } else {
+            args.count_props = 0;
+            cmd.write(&args)?;
+        }
         Ok(0)
     }
 
@@ -652,6 +728,87 @@ impl DrmFile {
         // DRM leases are not implemented; this device has no lessees.
         args.count_lessees = 0;
         cmd.write(&args)?;
+        Ok(0)
+    }
+
+    pub(super) fn mode_get_plane_resources(&self, cmd: DrmIoctlModeGetPlaneRes) -> Result<i32> {
+        let _scanout = self.scanout_or_err()?;
+        let mut args: abi::ModeGetPlaneRes = cmd.read()?;
+
+        // The single primary plane covering the only CRTC.
+        args.count_planes = 1;
+        cmd.write(&args)?;
+        if args.plane_id_ptr != 0 {
+            write_user_value(args.plane_id_ptr as usize, &Self::PLANE_ID)?;
+        }
+        Ok(0)
+    }
+
+    pub(super) fn mode_get_gamma(&self, cmd: DrmIoctlModeGetGamma) -> Result<i32> {
+        let args: abi::ModeCrtcLut = cmd.read()?;
+        if args.crtc_id != CRTC_ID {
+            return_errno_with_message!(Errno::ENOENT, "no such CRTC");
+        }
+        // The scanout has no programmable LUT; the CRTC reports
+        // `gamma_size == 0`, and Linux rejects a nonzero read size.
+        if args.gamma_size != 0 {
+            return_errno_with_message!(Errno::EINVAL, "the CRTC has no gamma LUT");
+        }
+        Ok(0)
+    }
+
+    /// The id of the single primary plane exposed for the CRTC, and of its
+    /// `type` property. The values are arbitrary but must be consistent.
+    pub(super) const PLANE_ID: u32 = 100;
+    pub(super) const PLANE_TYPE_PROP_ID: u32 = 62;
+
+    /// `DRM_FORMAT_XRGB8888`, the only format the plane advertises.
+    const PLANE_FORMAT_XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
+
+    pub(super) fn mode_get_plane(&self, cmd: DrmIoctlModeGetPlane) -> Result<i32> {
+        let scanout = self.scanout_or_err()?;
+        let mut args: abi::ModeGetPlane = cmd.read()?;
+        if args.plane_id != Self::PLANE_ID {
+            return_errno_with_message!(Errno::ENOENT, "no such plane");
+        }
+
+        let kms = self.minor().registered_device().kms().lock();
+        args.crtc_id = CRTC_ID;
+        args.fb_id = kms.current_fb().lock().unwrap_or_default();
+        args.possible_crtcs = 1;
+        args.gamma_size = 0;
+        // XRGB8888 is the only supported format.
+        args.count_format_types = 1;
+        cmd.write(&args)?;
+        if args.format_type_ptr != 0 {
+            write_user_value(args.format_type_ptr as usize, &Self::PLANE_FORMAT_XRGB8888)?;
+        }
+        let _ = scanout;
+        Ok(0)
+    }
+
+    pub(super) fn mode_get_property(&self, cmd: DrmIoctlModeGetProperty) -> Result<i32> {
+        let mut args: abi::ModeGetProperty = cmd.read()?;
+        if args.prop_id != Self::PLANE_TYPE_PROP_ID {
+            return_errno_with_message!(Errno::ENOENT, "no such property");
+        }
+
+        args.flags = 1 << 3; // DRM_MODE_PROP_ENUM
+        args.count_values = 0;
+        args.count_enum_blobs = 1;
+        let mut name = [0u8; 32];
+        name[..4].copy_from_slice(b"type");
+        args.name = name;
+        cmd.write(&args)?;
+
+        if args.enum_blob_ptr != 0 {
+            let mut entry = abi::ModePropEnum {
+                value: 1, // DRM_PLANE_TYPE_PRIMARY
+                name: [0u8; 32],
+            };
+            entry.name[..7].copy_from_slice(b"primary");
+            write_user_value(args.enum_blob_ptr as usize, &entry)?;
+        }
         Ok(0)
     }
 }

@@ -29,14 +29,14 @@ use crate::{
     },
 };
 
-struct VirtioPciNotify {
+pub struct VirtioPciNotify {
     offset_multiplier: u32,
     offset: u32,
     io_memory: IoMem,
 }
 
 #[derive(Debug)]
-pub(super) struct VirtioPciDevice {
+pub struct VirtioPciDevice {
     device_id: PciDeviceId,
 }
 
@@ -52,7 +52,7 @@ impl PciDevice for VirtioPciDevice {
     }
 }
 
-pub(super) struct VirtioPciModernTransport {
+pub struct VirtioPciModernTransport {
     device_type: VirtioDeviceType,
     common_device: PciCommonDevice,
     common_cfg: SafePtr<VirtioPciCommonCfg, IoMem>,

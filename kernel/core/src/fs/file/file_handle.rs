@@ -18,10 +18,7 @@ use crate::{
     prelude::*,
     process::{Process, signal::Pollable},
     util::ioctl::RawIoctl,
-    vm::{
-        page_cache::Vmo,
-        vmar::{FileMmapRequest, MapHandle},
-    },
+    vm::page_cache::Vmo,
 };
 
 /// The basic operations defined on a file
@@ -98,10 +95,7 @@ pub(crate) trait FileLike: Pollable + Send + Sync + Any {
     ///
     /// If this file has a corresponding mappable object of [`Mappable`],
     /// then it can be either an inode or an MMIO region.
-    ///
-    /// Implementations may inspect the mapping request to reject unsupported
-    /// mapping semantics.
-    fn mappable(&self, request: FileMmapRequest) -> Result<MappableObject<'_>> {
+    fn mappable(&self) -> Result<Mappable> {
         // `ENODEV` means that "The underlying filesystem of the specified file does not support
         // memory mapping".
         // Reference: <https://man7.org/linux/man-pages/man2/mmap.2.html>.
@@ -348,7 +342,8 @@ impl StatusFlagsUpdate {
 }
 
 /// An object that may be memory mapped into the user address space.
-pub enum MappableObject<'a> {
+#[derive(Clone, Debug)]
+pub enum Mappable {
     /// A VMO (i.e., page cache).
     Vmo(Arc<Vmo>),
     /// An MMIO region.

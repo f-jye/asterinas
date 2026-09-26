@@ -77,7 +77,7 @@ impl Drop for MajorIdOwner {
 const EXTENDED_MAJOR: u16 = 259;
 
 /// An allocator for extended device IDs.
-pub(crate) struct ExtendedDeviceIdAllocator {
+pub struct ExtendedDeviceIdAllocator {
     major: MajorIdOwner,
     minor_allocator: Mutex<IdAlloc>,
 }
@@ -94,15 +94,14 @@ impl ExtendedDeviceIdAllocator {
     }
 
     /// Allocates an extended device ID.
-    pub(crate) fn allocate(&self) -> DeviceId {
+    pub fn allocate(&self) -> DeviceId {
         let minor = self.minor_allocator.lock().alloc().unwrap() as u32;
 
         DeviceId::new(self.major.get(), MinorId::new(minor))
     }
 
     /// Releases an extended device ID.
-    #[expect(dead_code)]
-    pub(crate) fn release(&mut self, id: DeviceId) {
+    pub fn release(&mut self, id: DeviceId) {
         if id.major() != self.major.get() {
             return;
         }
@@ -111,7 +110,7 @@ impl ExtendedDeviceIdAllocator {
     }
 }
 
-pub(crate) static EXTENDED_DEVICE_ID_ALLOCATOR: Once<ExtendedDeviceIdAllocator> = Once::new();
+pub static EXTENDED_DEVICE_ID_ALLOCATOR: Once<ExtendedDeviceIdAllocator> = Once::new();
 
 pub(super) fn init() {
     EXTENDED_DEVICE_ID_ALLOCATOR.call_once(ExtendedDeviceIdAllocator::new);

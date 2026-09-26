@@ -8,9 +8,9 @@ use crate::{
     packet::{ApplicationLayer, TransportLayer, TxPacket},
 };
 
-pub(in crate::iface) const HEADER_LEN: usize = size_of::<Header>();
+pub const HEADER_LEN: usize = size_of::<Header>();
 
-pub(in crate::iface) fn emit_dst_unreachable(
+pub fn emit_dst_unreachable(
     pkt: TxPacket<ApplicationLayer>,
     reason: Icmpv4DstUnreachable,
     csum: bool,
