@@ -208,6 +208,15 @@ pub(super) mod abi {
         pub size: u64,
     }
 
+    /// `struct drm_mode_destroy_dumb` in Linux.
+    ///
+    /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L1266>.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Pod)]
+    pub struct ModeDestroyDumb {
+        pub handle: u32,
+    }
+
     /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L1262>.
     #[repr(C)]
     #[derive(Clone, Copy, Debug, Default, Pod)]
@@ -611,7 +620,7 @@ impl DrmFile {
     }
 
     pub(super) fn mode_destroy_dumb(&self, cmd: DrmIoctlDestroyDumb) -> Result<i32> {
-        let args: abi::ModeCreateDumb = cmd.read()?;
+        let args: abi::ModeDestroyDumb = cmd.read()?;
         let gem = self.gem_or_err()?;
         gem.destroy_buffer(args.handle)?;
         Ok(0)
