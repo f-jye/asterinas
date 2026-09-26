@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use core::{fmt, mem};
+use core::{fmt, mem, time::Duration};
 
 use aster_bigtcp::socket::ReceiveBehavior;
 use aster_rights::ReadOp;
@@ -26,6 +26,7 @@ pub(crate) struct UnixControlMessage(Message);
 enum Message {
     Files(FileMessage),
     Cred(CredMessage),
+    Time(TimeMessage),
 }
 
 impl UnixControlMessage {
@@ -50,6 +51,12 @@ impl UnixControlMessage {
                 let msg = CredMessage::read_from(header, reader)?;
                 Ok(Some(Self(Message::Cred(msg))))
             }
+            // Timestamps are synthesized by the kernel on delivery; user space
+            // cannot send them.
+            CControlType::SCM_TIMESTAMP => {
+                reader.skip(header.payload_len());
+                Ok(None)
+            }
             _ => {
                 warn!("unsupported control message type in {:?}", header);
                 reader.skip(header.payload_len());
@@ -66,6 +73,7 @@ impl UnixControlMessage {
         match &self.0 {
             Message::Files(msg) => msg.write_to(writer, fd_flags),
             Message::Cred(msg) => msg.write_to(writer, fd_flags),
+            Message::Time(msg) => msg.write_to(writer),
         }
     }
 }
@@ -197,6 +205,38 @@ impl CredMessage {
     }
 }
 
+/// The `struct timeval` payload of an `SCM_TIMESTAMP` control message.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod)]
+struct CTimeVal {
+    tv_sec: i64,
+    tv_usec: i64,
+}
+
+#[derive(Debug)]
+struct TimeMessage {
+    timestamp: Duration,
+}
+
+impl TimeMessage {
+    fn write_to(&self, writer: &mut VmWriter) -> Result<(CControlHeader, RecvFlags)> {
+        let time_val = CTimeVal {
+            tv_sec: self.timestamp.as_secs() as i64,
+            tv_usec: self.timestamp.subsec_micros() as i64,
+        };
+
+        let header = CControlHeader::new(
+            CSocketOptionLevel::SOL_SOCKET,
+            CControlType::SCM_TIMESTAMP as i32,
+            size_of::<CTimeVal>(),
+        );
+        writer.write_val(&header)?;
+        writer.write_val(&time_val)?;
+
+        Ok((header, RecvFlags::empty()))
+    }
+}
+
 /// Control message types.
 ///
 /// Reference: <https://elixir.bootlin.com/linux/v6.13/source/include/linux/socket.h#L178>.
@@ -208,6 +248,7 @@ pub(crate) enum CControlType {
     SCM_CREDENTIALS = 2,
     SCM_SECURITY = 3,
     SCM_PIDFD = 4,
+    SCM_TIMESTAMP = 29,
 }
 
 /// Auxiliary data associated with UNIX messages.
@@ -250,6 +291,14 @@ impl AuxiliaryData {
                         );
                     }
                     files.append(&mut msg_files);
+                }
+                // Kernel-synthesized timestamps are receive-only; user
+                // space cannot send them.
+                Message::Time(TimeMessage { .. }) => {
+                    return_errno_with_message!(
+                        Errno::EINVAL,
+                        "sending a timestamp control message is not allowed"
+                    );
                 }
                 Message::Cred(CredMessage { cred: msg_cred }) => {
                     let cur_cred = SocketCred::<ReadOp>::new_current();
@@ -298,10 +347,17 @@ impl AuxiliaryData {
         &mut self,
         behavior: ReceiveBehavior,
         is_pass_cred: bool,
+        is_timestamp: bool,
+        timestamp: Duration,
     ) -> Vec<ControlMessage> {
         let mut ctrl_msgs = Vec::new();
 
         let Self { files, cred } = self;
+
+        if is_timestamp {
+            let unix_ctrl_msg = UnixControlMessage(Message::Time(TimeMessage { timestamp }));
+            ctrl_msgs.push(ControlMessage::Unix(unix_ctrl_msg));
+        }
 
         if is_pass_cred {
             let unix_ctrl_msg = UnixControlMessage(Message::Cred(CredMessage {

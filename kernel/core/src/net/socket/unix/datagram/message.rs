@@ -20,6 +20,7 @@ use crate::{
     },
     prelude::*,
     process::signal::Pollee,
+    time::clocks::RealTimeClock,
     util::{MultiRead, MultiWrite},
 };
 
@@ -27,6 +28,7 @@ pub(super) struct MessageQueue {
     addr: Once<UnixSocketAddr>,
     inner: Mutex<Option<Inner>>,
     is_pass_cred: AtomicBool,
+    is_timestamp: AtomicBool,
     pollee: Pollee,
     send_wait_queue: WaitQueue,
 }
@@ -41,6 +43,10 @@ struct Message {
     bytes: Vec<u8>,
     aux: AuxiliaryData,
     src: UnixSocketAddr,
+    /// The wall-clock time at which the message was queued. Delivered as an
+    /// `SCM_TIMESTAMP` control message when the receiver enables
+    /// `SO_TIMESTAMP`.
+    timestamp: Duration,
 }
 
 impl MessageQueue {
@@ -89,7 +95,14 @@ impl MessageQueue {
 
             let src = source.queue.addr();
 
-            Message { bytes, aux, src }
+            let timestamp = RealTimeClock::get().read_time();
+
+            Message {
+                bytes,
+                aux,
+                src,
+                timestamp,
+            }
         };
 
         inner.total_length += msg.bytes.len();
@@ -146,6 +159,7 @@ impl MessageReceiver {
             addr: Once::new(),
             inner: Mutex::new(Some(inner)),
             is_pass_cred: AtomicBool::new(false),
+            is_timestamp: AtomicBool::new(false),
             pollee: Pollee::new(),
             send_wait_queue: WaitQueue::new(),
         };
@@ -195,6 +209,7 @@ impl MessageReceiver {
         let len = writer.write(&mut VmReader::from(msg.bytes.as_slice()))?;
 
         let is_pass_cred = self.queue.is_pass_cred.load(Ordering::Relaxed);
+        let is_timestamp = self.queue.is_timestamp.load(Ordering::Relaxed);
         let src = msg.src.clone();
 
         let behavior = flags.receive_behavior();
@@ -207,10 +222,14 @@ impl MessageReceiver {
             // So we have to wake up all the writers here.
             self.queue.send_wait_queue.wake_all();
 
-            message.aux.generate_control(behavior, is_pass_cred)
+            message
+                .aux
+                .generate_control(behavior, is_pass_cred, is_timestamp, message.timestamp)
         } else {
             let message = inner.messages.front_mut().unwrap();
-            message.aux.generate_control(behavior, is_pass_cred)
+            message
+                .aux
+                .generate_control(behavior, is_pass_cred, is_timestamp, message.timestamp)
         };
 
         let output = RecvOutput::new_for_packet(flags, len, message_len);
@@ -231,6 +250,12 @@ impl MessageReceiver {
         self.queue
             .is_pass_cred
             .store(is_pass_cred, Ordering::Relaxed);
+    }
+
+    pub(super) fn set_timestamp(&self, is_timestamp: bool) {
+        self.queue
+            .is_timestamp
+            .store(is_timestamp, Ordering::Relaxed);
     }
 
     pub(super) fn addr(&self) -> UnixSocketAddr {

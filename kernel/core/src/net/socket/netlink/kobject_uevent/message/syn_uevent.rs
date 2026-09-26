@@ -14,6 +14,7 @@ use super::uevent::SysObjAction;
 use crate::prelude::*;
 
 /// The synthetic uevent.
+#[cfg_attr(not(ktest), expect(dead_code))]
 pub(super) struct SyntheticUevent {
     pub(super) action: SysObjAction,
     pub(super) uuid: Option<Uuid>,
@@ -70,6 +71,7 @@ impl FromStr for SyntheticUevent {
     }
 }
 
+#[cfg_attr(not(ktest), expect(dead_code))]
 pub(super) struct Uuid(pub(super) String);
 
 impl FromStr for Uuid {
