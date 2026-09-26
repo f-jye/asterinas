@@ -22,7 +22,7 @@ use core::fmt::Debug;
 
 use aster_core::prelude::*;
 use aster_drm::device::{DrmDevice, DrmFeatures};
-use aster_framebuffer::framebuffer;
+use aster_framebuffer::{framebuffer, framebuffer::FrameBuffer};
 use component::{ComponentInitError, init_component};
 
 const SIMPLEDRM_NAME: &str = "simpledrm";
@@ -57,8 +57,10 @@ struct SimpleDrmDevice {
 
 impl SimpleDrmDevice {
     fn new() -> Result<Self> {
+        // The device renders through the boot framebuffer, whose dumb-buffer
+        // aliasing provides minimal kernel mode-setting.
         Ok(Self {
-            features: DrmFeatures::empty(),
+            features: DrmFeatures::MODESET,
         })
     }
 }
@@ -74,5 +76,9 @@ impl DrmDevice for SimpleDrmDevice {
 
     fn features(&self) -> &DrmFeatures {
         &self.features
+    }
+
+    fn scanout(&self) -> Option<Arc<FrameBuffer>> {
+        framebuffer::FRAMEBUFFER.get().cloned()
     }
 }

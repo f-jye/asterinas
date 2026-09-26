@@ -7,7 +7,7 @@ use aster_core::{
     current,
     events::IoEvents,
     fs::{
-        file::{PerOpenFileOps, StatusFlags},
+        file::{Mappable, PerOpenFileOps, StatusFlags},
         vfs::{inode::FileOps, path::Path},
     },
     prelude::*,
@@ -53,7 +53,11 @@ impl DrmFile {
         self.minor.type_()
     }
 
-    pub(super) fn has_features(&self, feature: DrmFeatures) -> bool {
+    pub(super) fn minor(&self) -> &Arc<DrmMinor> {
+        &self.minor
+    }
+
+    pub fn has_features(&self, feature: DrmFeatures) -> bool {
         self.device().has_features(feature)
     }
 
@@ -207,6 +211,15 @@ impl PerOpenFileOps for DrmFile {
 
     fn is_offset_aware(&self) -> bool {
         true
+    }
+
+    fn mappable(&self) -> Result<Mappable> {
+        // Mapping a DRM primary file covers the scanout framebuffer, which is
+        // what `DRM_IOCTL_MODE_MAP_DUMB` hands out as fake offset zero.
+        let Some(scanout) = self.minor.device().scanout() else {
+            return_errno_with_message!(Errno::ENODEV, "the device has no scanout");
+        };
+        Ok(Mappable::IoMem(scanout.io_mem().clone()))
     }
 
     fn ioctl(&self, _path: &Path, raw_ioctl: RawIoctl) -> Result<i32> {

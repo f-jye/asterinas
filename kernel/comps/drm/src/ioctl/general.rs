@@ -122,9 +122,9 @@ impl DrmFile {
 
                 match cap {
                     DrmGetCapability::DumbBuffer => {
-                        // TODO: Derive this capability from the optional dumb-buffer
-                        // operation once that interface is introduced.
-                        0
+                        // Every dumb buffer aliases the boot framebuffer, which
+                        // the minimal KMS ioctls provide.
+                        1
                     }
                     DrmGetCapability::VblankHighCrtc => 1,
                     // TODO: Once KMS is integrated, obtain the mode config from the

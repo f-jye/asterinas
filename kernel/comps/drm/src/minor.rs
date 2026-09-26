@@ -61,6 +61,10 @@ impl DrmMinor {
         self.registered_device.device()
     }
 
+    pub(super) fn registered_device(&self) -> &Arc<RegisteredDrmDevice> {
+        &self.registered_device
+    }
+
     /// Opens a client through this minor and returns its master context, if applicable.
     pub(super) fn open_client(&self, client_id: u64) -> Option<Arc<DrmMaster>> {
         match self.type_ {
