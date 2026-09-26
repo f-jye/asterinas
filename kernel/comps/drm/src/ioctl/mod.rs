@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 mod general;
+mod kms;
 use aster_core::{dispatch_ioctl, prelude::*, util::ioctl::RawIoctl};
 use ioctl_defs::*;
 
@@ -41,6 +42,50 @@ impl DrmFile {
             cmd @ DrmIoctlDropMaster => {
                 self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::empty())?;
                 self.drm_drop_master(cmd)
+            }
+            cmd @ DrmIoctlModeGetResources => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_get_resources(cmd)
+            }
+            cmd @ DrmIoctlModeGetCrtc => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_get_crtc(cmd)
+            }
+            cmd @ DrmIoctlModeSetCrtc => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_set_crtc(cmd)
+            }
+            cmd @ DrmIoctlModeGetEncoder => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_get_encoder(cmd)
+            }
+            cmd @ DrmIoctlModeGetConnector => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_get_connector(cmd)
+            }
+            cmd @ DrmIoctlModeGetFb => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_get_fb(cmd)
+            }
+            cmd @ DrmIoctlAddFb => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_add_fb(cmd)
+            }
+            cmd @ DrmIoctlRmFb => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_rm_fb(cmd)
+            }
+            cmd @ DrmIoctlCreateDumb => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_create_dumb(cmd)
+            }
+            cmd @ DrmIoctlMapDumb => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_map_dumb(cmd)
+            }
+            cmd @ DrmIoctlDestroyDumb => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_destroy_dumb(cmd)
             }
             _ => {
                 ostd::warn!(
@@ -114,7 +159,13 @@ mod ioctl_defs {
         util::ioctl::{InData, InOutData, NoData, OutData},
     };
 
-    use super::general::{DrmAuth, DrmGetCap, DrmSetClientCap, DrmUnique, DrmVersion};
+    use super::{
+        general::{DrmAuth, DrmGetCap, DrmSetClientCap, DrmUnique, DrmVersion},
+        kms::abi::{
+            ModeCardRes, ModeCreateDumb, ModeCrtc, ModeFbCmd, ModeGetConnector, ModeGetEncoder,
+            ModeMapDumb,
+        },
+    };
 
     pub(super) type DrmIoctlVersion =
         ioc!(DRM_IOCTL_VERSION, b'd', 0x00, InOutData<DrmVersion>);
@@ -130,4 +181,24 @@ mod ioctl_defs {
         ioc!(DRM_IOCTL_AUTH_MAGIC, b'd', 0x11, InData<DrmAuth>);
     pub(super) type DrmIoctlSetMaster = ioc!(DRM_IOCTL_SET_MASTER, b'd', 0x1e, NoData);
     pub(super) type DrmIoctlDropMaster = ioc!(DRM_IOCTL_DROP_MASTER, b'd', 0x1f, NoData);
+    pub(super) type DrmIoctlModeGetResources =
+        ioc!(DRM_IOCTL_MODE_GETRESOURCES, b'd', 0xA0, InOutData<ModeCardRes>);
+    pub(super) type DrmIoctlModeGetCrtc =
+        ioc!(DRM_IOCTL_MODE_GETCRTC, b'd', 0xA1, InOutData<ModeCrtc>);
+    pub(super) type DrmIoctlModeSetCrtc =
+        ioc!(DRM_IOCTL_MODE_SETCRTC, b'd', 0xA2, InData<ModeCrtc>);
+    pub(super) type DrmIoctlModeGetEncoder =
+        ioc!(DRM_IOCTL_MODE_GETENCODER, b'd', 0xA6, InOutData<ModeGetEncoder>);
+    pub(super) type DrmIoctlModeGetConnector =
+        ioc!(DRM_IOCTL_MODE_GETCONNECTOR, b'd', 0xA7, InOutData<ModeGetConnector>);
+    pub(super) type DrmIoctlModeGetFb =
+        ioc!(DRM_IOCTL_MODE_GETFB, b'd', 0xAA, InOutData<ModeFbCmd>);
+    pub(super) type DrmIoctlAddFb = ioc!(DRM_IOCTL_MODE_ADDFB, b'd', 0xAB, InOutData<ModeFbCmd>);
+    pub(super) type DrmIoctlRmFb = ioc!(DRM_IOCTL_MODE_RMFB, b'd', 0xAC, InData<u32>);
+    pub(super) type DrmIoctlCreateDumb =
+        ioc!(DRM_IOCTL_MODE_CREATE_DUMB, b'd', 0xB2, InOutData<ModeCreateDumb>);
+    pub(super) type DrmIoctlMapDumb =
+        ioc!(DRM_IOCTL_MODE_MAP_DUMB, b'd', 0xB3, InOutData<ModeMapDumb>);
+    pub(super) type DrmIoctlDestroyDumb =
+        ioc!(DRM_IOCTL_MODE_DESTROY_DUMB, b'd', 0xB4, InData<ModeCreateDumb>);
 }

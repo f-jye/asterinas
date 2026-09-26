@@ -6,10 +6,11 @@ use alloc::{
 };
 use core::{
     fmt::Debug,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use aster_core::prelude::*;
+use aster_framebuffer::framebuffer::FrameBuffer;
 use ostd::sync::Mutex;
 use sparse_id_alloc::SparseIdAlloc;
 
@@ -27,6 +28,13 @@ pub trait DrmDevice: Debug + Send + Sync {
     fn features(&self) -> &DrmFeatures;
     fn has_features(&self, feature: DrmFeatures) -> bool {
         self.features().contains(feature)
+    }
+
+    /// Returns the boot framebuffer that backs this device's scanout, if the
+    /// device is a simple framebuffer display. The minimal KMS ioctls render
+    /// into it directly.
+    fn scanout(&self) -> Option<Arc<FrameBuffer>> {
+        None
     }
 }
 
@@ -63,6 +71,59 @@ pub(super) struct RegisteredDrmDevice {
     /// Primary files retain their own `Arc<DrmMaster>`, so clearing this
     /// pointer on `DROP_MASTER` does not destroy the former master's context.
     master: Mutex<Option<Arc<DrmMaster>>>,
+    /// The minimal KMS state: framebuffers created through
+    /// `DRM_IOCTL_MODE_ADDFB` and the framebuffer set by `DRM_IOCTL_MODE_SETCRTC`.
+    pub(super) kms: Mutex<Kms>,
+}
+
+/// The framebuffer objects and scanout state of one DRM device.
+///
+/// Every dumb buffer aliases the scanout framebuffer, so an entry only
+/// records the metadata that validation and queries need.
+#[derive(Debug)]
+pub(super) struct Kms {
+    fbs: Mutex<BTreeMap<u32, KmsFb>>,
+    next_fb_id: AtomicU32,
+    current_fb: Mutex<Option<u32>>,
+}
+
+/// A framebuffer registered through `DRM_IOCTL_MODE_ADDFB`.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct KmsFb {
+    pub width: u32,
+    pub height: u32,
+    pub pitch: u32,
+    pub bpp: u32,
+    pub depth: u32,
+}
+
+pub(super) const FIRST_FB_ID: u32 = 1;
+
+impl Default for Kms {
+    fn default() -> Self {
+        Self {
+            fbs: Mutex::new(BTreeMap::new()),
+            next_fb_id: AtomicU32::new(FIRST_FB_ID),
+            current_fb: Mutex::new(None),
+        }
+    }
+}
+pub(super) const CONNECTOR_ID: u32 = 32;
+pub(super) const ENCODER_ID: u32 = 33;
+pub(super) const CRTC_ID: u32 = 34;
+
+impl Kms {
+    pub(super) fn alloc_fb_id(&self) -> u32 {
+        self.next_fb_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub(super) fn fbs(&self) -> &Mutex<BTreeMap<u32, KmsFb>> {
+        &self.fbs
+    }
+
+    pub(super) fn current_fb(&self) -> &Mutex<Option<u32>> {
+        &self.current_fb
+    }
 }
 
 impl RegisteredDrmDevice {
@@ -71,6 +132,7 @@ impl RegisteredDrmDevice {
             index: DrmDeviceIndex::alloc()?,
             device,
             master: Mutex::new(None),
+            kms: Mutex::new(Kms::default()),
         })
     }
 
@@ -80,6 +142,10 @@ impl RegisteredDrmDevice {
 
     pub(super) fn device(&self) -> &Arc<dyn DrmDevice> {
         &self.device
+    }
+
+    pub(super) fn kms(&self) -> &Mutex<Kms> {
+        &self.kms
     }
 
     pub(super) fn is_client_master(&self, client_id: u64) -> bool {

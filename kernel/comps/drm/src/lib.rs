@@ -16,15 +16,18 @@
 #![no_std]
 #![deny(unsafe_code)]
 
-use alloc::sync::Arc;
+use alloc::{boxed::Box, format, sync::Arc};
 
 use aster_core::{
-    device::{Device, registry::char},
+    device::{Device, DeviceType, registry::char},
+    fs::{devtmpfs::DevtmpfsNodeMeta, file::PerOpenFileOps},
     prelude::*,
     process::{UserNamespace, credentials::capabilities::CapSet, posix_thread::AsPosixThread},
     security::lsm::hooks::{self as lsm_hook, CapableContext},
 };
-use ostd::task::Task;
+use aster_device::{AnyDevice, Class, ClassDevice, ClassHandle, DevNode, DevNum, SysStr};
+use device_id::{DeviceId, MajorId, MinorId};
+use ostd::{sync::Mutex, task::Task};
 
 use crate::{
     device::{DrmDevice, DrmFeatures, RegisteredDrmDevice},
@@ -59,14 +62,79 @@ pub fn register_device(device: Arc<dyn DrmDevice>) -> Result<()> {
 
     let primary_minor = DrmMinor::new(registered_device, DrmMinorType::Primary);
 
-    if let Err(error) = char::register(primary_minor) {
+    let card = ClassDevice::builder(&drm_class(), "card0", primary_minor.clone())
+        .devnum(DevNum::char(DeviceId::new(
+            MajorId::new(DRM_MAJOR_ID),
+            MinorId::new(DRM_PRIMARY_MINOR_BASE),
+        )))
+        .build();
+
+    // The device model publishes sysfs topology (class dir, subsystem link,
+    // dev attribute, /sys/dev/char entry) and creates the /dev node itself,
+    // so the char registry only wires `open` to the minor.
+    if let Err(error) = aster_device::add(&card) {
         if let Some(render_minor) = render_minor {
             let _ = char::unregister(render_minor.id());
         }
-        return Err(error);
+        return Err(Error::from(error));
     }
 
+    // The char registry routes `open` back to the minor.
+    char::register(Arc::new(DrmCard(card)))?;
+
     Ok(())
+}
+
+fn drm_class() -> Arc<ClassHandle<DrmClass>> {
+    static DRM_CLASS: Mutex<Option<Arc<ClassHandle<DrmClass>>>> = Mutex::new(None);
+    DRM_CLASS
+        .lock()
+        .get_or_insert_with(|| {
+            aster_device::register_class(DrmClass)
+                .expect("the `drm` class must not be registered twice")
+        })
+        .clone()
+}
+const DRM_MAJOR_ID: u16 = 226;
+const DRM_PRIMARY_MINOR_BASE: u32 = 0;
+
+/// The `drm` class: display devices published through the DRM subsystem,
+/// placed under `/sys/devices/virtual/drm/` and exposed as `/dev/dri/card0`.
+struct DrmClass;
+
+impl Class for DrmClass {
+    const NAME: &'static str = "drm";
+    type Device = Arc<DrmMinor>;
+
+    fn devnode(&self, dev: &ClassDevice<Self>) -> Option<DevNode> {
+        Some(DevNode {
+            path: Some(SysStr::from(format!("dri/{}", dev.base().name()))),
+            mode: None,
+        })
+    }
+}
+
+/// A newtype that lets the char registry open DRM files for a card device
+/// published through the device model (orphan rule: `ClassDevice` is foreign).
+struct DrmCard(Arc<ClassDevice<DrmClass>>);
+
+impl Device for DrmCard {
+    fn type_(&self) -> DeviceType {
+        DeviceType::Char
+    }
+
+    fn id(&self) -> DeviceId {
+        self.0.payload().id()
+    }
+
+    fn devtmpfs_meta(&self) -> Option<DevtmpfsNodeMeta> {
+        // The device model creates the node when the device is added.
+        None
+    }
+
+    fn open(&self) -> Result<Box<dyn PerOpenFileOps>> {
+        self.0.payload().open()
+    }
 }
 
 fn has_current_sys_admin() -> bool {
