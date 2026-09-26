@@ -191,9 +191,15 @@ where
         )?;
 
         // On sockets with SO_PASSCRED enabled, attach the sender credentials.
-        // Kernel-originated messages (e.g. uevents) carry pid 0.
+        // Kernel-originated messages (e.g. uevents) carry pid 0; messages
+        // relayed from another user-space socket carry the sender's real
+        // credentials.
+        let cred = match &*self.inner.read() {
+            Inner::Bound(bound) => *bound.last_recv_cred.lock(),
+            Inner::Unbound(_) => CUserCred::new_kernel(),
+        };
         let control_messages = if self.options.read().socket.pass_cred() {
-            vec![ControlMessage::KernelCred(CUserCred::new_kernel())]
+            vec![ControlMessage::KernelCred(cred)]
         } else {
             Vec::new()
         };
