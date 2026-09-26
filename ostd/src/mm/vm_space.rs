@@ -18,8 +18,8 @@ use crate::{
     cpu_local_cell,
     io::IoMem,
     mm::{
-        Frame, HasPaddrRange, PAGE_SIZE, PageProperty, PrivilegedPageFlags, UFrame, VmReader,
-        VmWriter,
+        Frame, PAGE_SIZE, PageProperty, PrivilegedPageFlags, UFrame, VmReader, VmWriter,
+        dma::DmaCoherent,
         frame::FrameRef,
         io::Fallible,
         kspace::KERNEL_PAGE_TABLE,
@@ -428,6 +428,50 @@ impl<'a> CursorMut<'a> {
         if !iomems.iter().any(|iomem| io_mem_contains(iomem, &io_mem)) {
             iomems.retain(|iomem| !io_mem_contains(&io_mem, iomem));
             iomems.push(io_mem);
+        }
+    }
+
+    /// Maps a range of DMA-coherent memory into the current slot.
+    ///
+    /// The memory region to be mapped is the [`DmaCoherent`] region starting at
+    /// `offset` and extending to `offset + len`, or to the end of [`DmaCoherent`],
+    /// whichever comes first. This method will bring the cursor to the next
+    /// slot after the modification.
+    ///
+    /// # Limitations
+    ///
+    /// The caller must keep the [`DmaCoherent`] alive as long as any mapping
+    /// created by this method exists, since the pages are mapped as untracked
+    /// I/O memory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if
+    ///  - `len` or `offset` is not aligned to the page size;
+    ///  - the current virtual address is already mapped.
+    pub fn map_dma(&mut self, dma: &DmaCoherent, prop: PageProperty, len: usize, offset: usize) {
+        assert_eq!(len % PAGE_SIZE, 0);
+        assert_eq!(offset % PAGE_SIZE, 0);
+
+        if offset >= dma.size() {
+            return;
+        }
+
+        let paddr_begin = dma.paddr() + offset;
+        let paddr_end = if dma.size() - offset < len {
+            dma.paddr() + dma.size()
+        } else {
+            dma.paddr() + len + offset
+        };
+
+        for current_paddr in (paddr_begin..paddr_end).step_by(PAGE_SIZE) {
+            // SAFETY: It is safe to map DMA memory into the userspace as long
+            // as the caller keeps the allocation alive, which is part of the
+            // contract of this method.
+            unsafe {
+                self.pt_cursor
+                    .map(VmItem::new_untracked_io(current_paddr, prop))
+            };
         }
     }
 

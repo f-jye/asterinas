@@ -2,7 +2,7 @@
 
 use core::num::NonZeroUsize;
 
-use super::{MappedMemory, MappedVmo, RssDelta, VmMapping, Vmar};
+use super::{MappedDma, MappedMemory, MappedVmo, RssDelta, VmMapping, Vmar};
 use crate::{
     fs::{
         file::{FileLike, MappableObject},
@@ -349,18 +349,8 @@ impl<'a, 'b> VmarMapOptions<'a, 'b> {
                     MappedMemory::Vmo(MappedVmo::new(vmo, vmo_offset, is_writable_tracked)?);
                 (mapped_mem, None)
             }
-            Some(MappableObject::Device(mappable)) => {
-                if !map_mode.is_shared() {
-                    return_errno_with_message!(
-                        Errno::EINVAL,
-                        "private device mappings are not yet supported"
-                    );
-                }
-
-                // Note that `MappedMemory::Anonymous` is temporary. This will
-                // be corrected in `VmMapping::populate_device` below.
-                (MappedMemory::Anonymous, Some(mappable))
-            }
+            Some(Mappable::IoMem(io_mem)) => (MappedMemory::Device, Some(io_mem)),
+            Some(Mappable::Dma(dma)) => (MappedMemory::Dma(MappedDma::new(dma)), None),
             None => (MappedMemory::Anonymous, None),
         };
 
@@ -384,18 +374,10 @@ impl<'a, 'b> VmarMapOptions<'a, 'b> {
         // otherwise another traversal is needed for locating the `VmMapping`.
         // Exchange the operation is ok since we hold the write lock on the
         // VMAR.
-        if let Some(mappable) = device_mappable {
-            let mut rss_delta = RssDelta::new(parent);
-            if let Err(err) =
-                vm_mapping.populate_device(parent.vm_space(), mappable, vmo_offset, &mut rss_delta)
-            {
-                // Unmap all populated pages if a failure occurs.
-                rss_delta.add(
-                    MapHandle::DEVICE_RSS_TYPE,
-                    -(vm_mapping.unmap(parent.vm_space()) as isize),
-                );
-                return Err(err);
-            }
+        if let Some(io_mem) = io_mem {
+            vm_mapping.populate_device(parent.vm_space(), io_mem, vmo_offset);
+        } else if matches!(vm_mapping.mapped_memory(), MappedMemory::Dma(_)) {
+            vm_mapping.populate_dma(parent.vm_space(), vmo_offset);
         }
 
         // Add the mapping to the VMAR.

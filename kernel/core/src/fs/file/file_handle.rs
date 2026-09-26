@@ -6,6 +6,8 @@
 
 use core::fmt::Display;
 
+use ostd::{io::IoMem, mm::dma::DmaCoherent};
+
 use super::{
     AccessMode, FileCommon, InodeHandle, SettableStatusFlags, StatusFlags, file_table::FdFlags,
     inode_handle::SeekFrom,
@@ -349,47 +351,13 @@ impl StatusFlagsUpdate {
 pub enum MappableObject<'a> {
     /// A VMO (i.e., page cache).
     Vmo(Arc<Vmo>),
-    /// A device mapping.
-    Device(&'a dyn Mappable),
-}
-
-/// A trait that describes memory mapping behavior for special files (in `mmap`).
-pub trait Mappable {
-    /// Fills the memory region to map with `handle`.
+    /// An MMIO region.
+    IoMem(IoMem),
+    /// A DMA-coherent memory region.
     ///
-    /// `offset` specifies the file offset, which must be page-aligned.
-    ///
-    /// This method may fail after some pages have already been installed
-    /// through `handle`. In this case, the caller should remove those pages
-    /// and destroy the memory mapping.
-    fn map(&self, offset: usize, handle: MapHandle) -> Result<Box<dyn MappedObject>>;
-}
-
-/// A trait that describes memory mapping behavior for special files (after `mmap`).
-pub trait MappedObject: Send + Sync + Debug {
-    /// Duplicates the memory mapping at the specific offset.
-    ///
-    /// `offset` specifies the memory address offset within the mapping, which must be smaller than
-    /// the mapping size and page-aligned.
-    fn dup_at_offset(&self, offset: usize) -> Box<dyn MappedObject>;
-
-    /// Handles the page fault.
-    ///
-    /// `offset` specifies the memory address offset within the mapping, which must be smaller than
-    /// the mapping size and page-aligned.
-    fn handle_page_fault(&self, _offset: usize, _handle: MapHandle) -> Result<()> {
-        return_errno_with_message!(
-            Errno::EFAULT,
-            "device memory page faults cannot be resolved"
-        );
-    }
-}
-
-impl dyn MappedObject {
-    /// Duplicates the memory mapping.
-    pub(crate) fn dup(&self) -> Box<dyn MappedObject> {
-        self.dup_at_offset(0)
-    }
+    /// The region stays alive as long as any mapping backed by it exists,
+    /// because the mapped file holds the allocation.
+    Dma(Arc<DmaCoherent>),
 }
 
 /// Specifies the extent of a file synchronization operation.
