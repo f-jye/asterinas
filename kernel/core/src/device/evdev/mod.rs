@@ -15,6 +15,7 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
+use aster_device::{AnyDevice, Class, ClassDevice, ClassHandle, DevNode};
 use aster_input::{
     event_type_codes::SynEvent,
     input_dev::{InputDevice, InputEvent},
@@ -191,30 +192,51 @@ impl InputHandler for EvdevDevice {
     }
 }
 
-impl Device for EvdevDevice {
+/// The `input` class: evdev devices published through the device model, so
+/// that `/sys/class/input/eventX` and the `/sys/dev/char/13:X` entry exist
+/// and user-space device enumeration (libudev, hence libinput and Xorg) can
+/// discover them.
+struct InputClass;
+
+impl Class for InputClass {
+    const NAME: &'static str = "input";
+    type Device = Arc<EvdevDevice>;
+
+    fn devnode(&self, dev: &ClassDevice<Self>) -> Option<DevNode> {
+        // Linux places evdev nodes at /dev/input/eventX.
+        Some(DevNode {
+            path: Some(aster_device::SysStr::from(format!(
+                "input/{}",
+                dev.base().name()
+            ))),
+            mode: None,
+        })
+    }
+}
+
+/// An evdev device, as seen by the char registry.
+type EvdevClassDevice = ClassDevice<InputClass>;
+
+impl Device for EvdevClassDevice {
     fn type_(&self) -> DeviceType {
         DeviceType::Char
     }
 
     fn id(&self) -> DeviceId {
-        self.id
+        self.base()
+            .devnum()
+            .expect("evdev devices always have a device number")
+            .id()
     }
 
     fn devtmpfs_meta(&self) -> Option<DevtmpfsNodeMeta> {
-        Some(DevtmpfsNodeMeta::new(format!("input/event{}", self.id.minor().get())).unwrap())
+        // The device model creates the node when the device is added.
+        None
     }
 
     fn open(&self) -> Result<Box<dyn PerOpenFileOps>> {
-        // Get the device from the registry.
-        let devices = EVDEV_DEVICES.lock();
-        let Some(evdev) = devices.get(&self.id.minor()) else {
-            return_errno_with_message!(
-                Errno::ENODEV,
-                "the evdev device does not exist in the registry"
-            );
-        };
-
-        // Create a new opened evdev file for this evdev device.
+        // The class-device payload is the registered evdev device itself.
+        let evdev = self.payload().clone();
         let file = evdev.create_file(EVDEV_BUFFER_SIZE)?;
         Ok(file as Box<dyn PerOpenFileOps>)
     }
@@ -223,6 +245,9 @@ impl Device for EvdevDevice {
 /// The evdev handler class that creates device nodes for input devices.
 #[derive(Debug)]
 struct EvdevHandlerClass;
+
+/// The registered `input` class.
+static INPUT_CLASS: Once<Arc<ClassHandle<InputClass>>> = Once::new();
 
 impl InputHandlerClass for EvdevHandlerClass {
     fn name(&self) -> &str {
@@ -237,8 +262,25 @@ impl InputHandlerClass for EvdevHandlerClass {
         // Create an evdev device.
         let evdev = Arc::new(EvdevDevice::new(minor, dev.clone()));
 
-        // Register the device with the char device subsystem.
-        register(evdev.clone()).map_err(|_| ConnectError::InternalError)?;
+        // Publish through the device model: the class directory
+        // (/sys/class/input), the dev attribute, the /sys/dev/char entry and
+        // the /dev node come out together; the char registry only routes
+        // `open` back to the device.
+        let class = INPUT_CLASS.call_once(|| {
+            aster_device::register_class(InputClass)
+                .expect("the `input` class must not be registered twice")
+        });
+        let id = DeviceId::new(MajorId::new(EVDEV_MAJOR_ID), minor_id);
+        let device = ClassDevice::builder(class, format!("event{}", minor), evdev.clone())
+            .devnum(aster_device::DevNum::char(id))
+            .build();
+        aster_device::add(&device).map_err(|_| ConnectError::InternalError)?;
+
+        // The char registry routes `open` to the device.
+        if register(device.clone()).is_err() {
+            let _ = aster_device::remove(&device);
+            return Err(ConnectError::InternalError);
+        }
 
         // Add to our registry for looking up during disconnection.
         EVDEV_DEVICES.lock().insert(minor_id, evdev.clone());
@@ -269,9 +311,9 @@ impl InputHandlerClass for EvdevHandlerClass {
         };
 
         let evdev = devices.remove(&minor).unwrap();
-        let device_id = evdev.id();
+        let device_id = evdev.id;
 
-        // Unregister from the char device subsystem.
+        // Unregister from the char device subsystem and the device model.
         if let Err(err) = unregister(device_id) {
             ostd::warn!(
                 "Failed to unregister evdev device '{}' (minor: {}): {:?}",
@@ -279,6 +321,11 @@ impl InputHandlerClass for EvdevHandlerClass {
                 minor.get(),
                 err
             );
+        }
+        if let Some(class) = INPUT_CLASS.get()
+            && let Some(device) = class.find_device(&alloc::format!("event{}", minor.get()))
+        {
+            let _ = aster_device::remove(&device);
         }
 
         // TODO: Implement device node deletion when the functionality is available.
