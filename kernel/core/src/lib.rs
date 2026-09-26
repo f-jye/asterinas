@@ -61,6 +61,8 @@ mod time;
 
 /// Spawns a kernel thread that runs the given function.
 pub use crate::thread::spawn_kernel_thread;
+/// Suspends the current task for the given duration.
+pub use crate::time::sleep;
 pub mod util;
 // TODO: Add vDSO support for LoongArch.
 #[cfg(not(target_arch = "loongarch64"))]
