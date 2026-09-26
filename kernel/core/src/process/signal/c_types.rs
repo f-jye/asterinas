@@ -80,6 +80,27 @@ impl siginfo_t {
     pub(crate) fn si_addr(&self) -> Vaddr {
         self.siginfo_fields.sigfault().addr
     }
+
+    /// Returns the sending process's PID, as stored for `SI_QUEUE`-style
+    /// codes. The value is unspecified for other codes.
+    pub(crate) fn si_pid(&self) -> Pid {
+        self.siginfo_fields.common().first.piduid().pid
+    }
+
+    /// Returns the sending process's real UID (see [`Self::si_pid`]).
+    pub(crate) fn si_uid(&self) -> Uid {
+        self.siginfo_fields.common().first.piduid().uid
+    }
+
+    /// Returns the `si_int` payload of a queued signal.
+    pub(crate) fn si_int(&self) -> i32 {
+        *self.siginfo_fields.common().second.value().sigval_int()
+    }
+
+    /// Returns the `si_ptr` payload of a queued signal.
+    pub(crate) fn si_ptr(&self) -> Vaddr {
+        *self.siginfo_fields.common().second.value().sigval_ptr()
+    }
 }
 
 #[pod_union]
