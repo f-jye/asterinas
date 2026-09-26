@@ -14,6 +14,8 @@ use aster_framebuffer::framebuffer::FrameBuffer;
 use ostd::sync::Mutex;
 use sparse_id_alloc::SparseIdAlloc;
 
+use super::gem;
+
 static DRM_DEVICE_INDEX_ALLOCATOR: Mutex<SparseIdAlloc> = Mutex::new(SparseIdAlloc::new(0, 63));
 
 /// Defines the top-level contract of a DRM device instance.
@@ -77,17 +79,20 @@ pub(super) struct RegisteredDrmDevice {
 }
 
 /// The framebuffer objects and scanout state of one DRM device.
-///
-/// Every dumb buffer aliases the scanout framebuffer, so an entry only
-/// records the metadata that validation and queries need.
 #[derive(Debug)]
 pub(super) struct Kms {
     fbs: Mutex<BTreeMap<u32, KmsFb>>,
     next_fb_id: AtomicU32,
     current_fb: Mutex<Option<u32>>,
+    /// The dumb buffer arena, allocated lazily on first use so that a failed
+    /// arena allocation only disables dumb buffers, not the device.
+    gem: Mutex<Option<Arc<gem::Gem>>>,
+    /// The per-CRTC flip counter reported in page flip events.
+    flip_sequence: AtomicU32,
 }
 
-/// A framebuffer registered through `DRM_IOCTL_MODE_ADDFB`.
+/// A framebuffer registered through `DRM_IOCTL_MODE_ADDFB` or
+/// `DRM_IOCTL_MODE_ADDBFB2`.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct KmsFb {
     pub width: u32,
@@ -95,6 +100,11 @@ pub(super) struct KmsFb {
     pub pitch: u32,
     pub bpp: u32,
     pub depth: u32,
+    /// The fourcc pixel format (`DRM_FORMAT_*`). Read back by `MODE_GETFB2`.
+    #[expect(dead_code)]
+    pub format: u32,
+    /// The GEM handle of the backing dumb buffer.
+    pub handle: u32,
 }
 
 pub(super) const FIRST_FB_ID: u32 = 1;
@@ -105,6 +115,8 @@ impl Default for Kms {
             fbs: Mutex::new(BTreeMap::new()),
             next_fb_id: AtomicU32::new(FIRST_FB_ID),
             current_fb: Mutex::new(None),
+            gem: Mutex::new(None),
+            flip_sequence: AtomicU32::new(0),
         }
     }
 }
@@ -123,6 +135,26 @@ impl Kms {
 
     pub(super) fn current_fb(&self) -> &Mutex<Option<u32>> {
         &self.current_fb
+    }
+
+    pub(super) fn flip_sequence(&self) -> &AtomicU32 {
+        &self.flip_sequence
+    }
+
+    /// The dumb buffer arena, allocating it on first use.
+    pub(super) fn gem(&self) -> Result<Arc<gem::Gem>> {
+        let mut slot = self.gem.lock();
+        if let Some(gem) = slot.as_ref() {
+            return Ok(gem.clone());
+        }
+        let gem = gem::Gem::new()?;
+        *slot = Some(gem.clone());
+        Ok(gem)
+    }
+
+    /// The dumb buffer arena if it is already allocated.
+    pub(super) fn loaded_gem(&self) -> Option<Arc<gem::Gem>> {
+        self.gem.lock().clone()
     }
 }
 

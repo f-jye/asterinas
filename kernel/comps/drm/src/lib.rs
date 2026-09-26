@@ -47,6 +47,7 @@ macro_rules! __log_prefix {
 
 pub mod device;
 mod file;
+mod gem;
 mod ioctl;
 mod minor;
 

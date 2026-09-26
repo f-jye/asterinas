@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use alloc::sync::{Arc, Weak};
+use alloc::{
+    boxed::Box,
+    collections::VecDeque,
+    sync::{Arc, Weak},
+};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use aster_core::{
@@ -19,7 +23,7 @@ use aster_core::{
 };
 use atomic_integer_wrapper::define_atomic_version_of_integer_like_type;
 use ostd::{
-    mm::{VmReader, VmWriter},
+    mm::{FallibleVmRead, VmReader, VmWriter},
     sync::Mutex,
 };
 
@@ -42,6 +46,8 @@ pub(super) struct DrmFile {
     /// Authentication state present only for primary-node files.
     auth: Option<DrmPrimaryAuth>,
     minor: Arc<DrmMinor>,
+    /// Asynchronous DRM events (page flip completions) waiting to be read.
+    events: Mutex<VecDeque<Box<[u8]>>>,
 }
 
 impl DrmFile {
@@ -86,7 +92,13 @@ impl DrmFile {
             client_caps: AtomicDrmClientCaps::default(),
             auth,
             minor,
+            events: Mutex::new(VecDeque::new()),
         }
+    }
+
+    /// Queues a raw DRM event for delivery through `read`.
+    pub(super) fn queue_event(&self, event: Box<[u8]>) {
+        self.events.lock().push_back(event);
     }
 
     pub(super) fn is_master(&self) -> bool {
@@ -214,8 +226,14 @@ impl PerOpenFileOps for DrmFile {
     }
 
     fn mappable(&self) -> Result<Mappable> {
-        // Mapping a DRM primary file covers the scanout framebuffer, which is
-        // what `DRM_IOCTL_MODE_MAP_DUMB` hands out as fake offset zero.
+        // The dumb buffer arena, once allocated, is what `MAP_DUMB` offsets
+        // refer to; mapping the file maps the arena.
+        if let Some(gem) = self.minor().registered_device().kms().lock().loaded_gem() {
+            return Ok(Mappable::Dma(gem.arena()));
+        }
+        // Without dumb buffers, mapping a DRM primary file covers the scanout
+        // framebuffer, which is what `DRM_IOCTL_MODE_MAP_DUMB` handed out as
+        // fake offset zero in the legacy design.
         let Some(scanout) = self.minor.device().scanout() else {
             return_errno_with_message!(Errno::ENODEV, "the device has no scanout");
         };
@@ -232,10 +250,24 @@ impl FileOps for DrmFile {
     fn read_at(
         &self,
         _offset: usize,
-        _writer: &mut VmWriter,
+        writer: &mut VmWriter,
         _status_flags: StatusFlags,
     ) -> Result<usize> {
-        return_errno_with_message!(Errno::EINVAL, "reading from a DRM file is not supported")
+        // Delivers queued asynchronous events; each read drains as many
+        // complete events as fit into the caller's buffer.
+        let mut queue = self.events.lock();
+        let mut copied = 0;
+        while let Some(event) = queue.front() {
+            if event.len() > writer.avail() {
+                break;
+            }
+            let read = VmReader::from(event.as_ref())
+                .read_fallible(writer)
+                .map_err(|_| Error::from(Errno::EFAULT))?;
+            copied += read;
+            queue.pop_front();
+        }
+        Ok(copied)
     }
 
     fn write_at(
@@ -250,8 +282,8 @@ impl FileOps for DrmFile {
 
 impl Pollable for DrmFile {
     fn poll(&self, mask: IoEvents, _poller: Option<&mut PollHandle>) -> IoEvents {
-        let events = IoEvents::IN | IoEvents::OUT;
-        events & mask
+        let readable = (!self.events.lock().is_empty()).then_some(IoEvents::IN);
+        (IoEvents::OUT | readable.unwrap_or(IoEvents::empty())) & mask
     }
 }
 

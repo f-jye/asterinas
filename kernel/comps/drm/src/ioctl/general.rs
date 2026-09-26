@@ -122,24 +122,24 @@ impl DrmFile {
 
                 match cap {
                     DrmGetCapability::DumbBuffer => {
-                        // Every dumb buffer aliases the boot framebuffer, which
-                        // the minimal KMS ioctls provide.
+                        // Dumb buffers are allocated out of a device-wide
+                        // arena; the minimal KMS ioctls manage them.
                         1
                     }
                     DrmGetCapability::VblankHighCrtc => 1,
-                    // TODO: Once KMS is integrated, obtain the mode config from the
-                    // registered DRM device and check that it exists before reporting
-                    // mode-config-dependent capabilities below.
-                    DrmGetCapability::DumbPreferredDepth
-                    | DrmGetCapability::DumbPreferShadow
-                    | DrmGetCapability::AsyncPageFlip
-                    | DrmGetCapability::Addfb2Modifiers
-                    | DrmGetCapability::AtomicAsyncPageFlip => 0,
+                    DrmGetCapability::DumbPreferredDepth => 24,
+                    // Rendering into a shadow buffer and blitting is cheaper
+                    // than rendering directly into the write-combined arena.
+                    DrmGetCapability::DumbPreferShadow => 1,
+                    // Flips complete immediately: the blit happens during the
+                    // ioctl, so there is no asynchronous wait.
+                    DrmGetCapability::AsyncPageFlip => 1,
+                    DrmGetCapability::Addfb2Modifiers => 0,
                     DrmGetCapability::CursorWidth => DRM_DEFAULT_CURSOR_WIDTH,
                     DrmGetCapability::CursorHeight => DRM_DEFAULT_CURSOR_HEIGHT,
                     DrmGetCapability::PageFlipTarget => {
-                        // TODO: Derive this capability from the CRTC operations once
-                        // the KMS interface is introduced.
+                        // Flips complete immediately, so there is no target
+                        // vblank to request.
                         0
                     }
                     DrmGetCapability::CrtcInVblankEvent => 1,
