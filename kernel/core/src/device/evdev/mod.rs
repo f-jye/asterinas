@@ -38,6 +38,56 @@ use crate::{
     util::ring_buffer::RbProducer,
 };
 
+/// The `input` class: input devices exposed as `/dev/input/eventX`.
+///
+/// Xorg's libinput enumerates input devices through this sysfs class.
+struct InputClass;
+
+impl aster_device::Class for InputClass {
+    const NAME: &'static str = "input";
+    type Device = Arc<EvdevDevice>;
+
+    fn devnode(
+        &self,
+        dev: &aster_device::ClassDevice<Self>,
+    ) -> Option<aster_device::DevNode> {
+        use aster_device::AnyDevice;
+        Some(aster_device::DevNode {
+            path: Some(aster_device::SysStr::from(format!("input/{}", dev.base().name()))),
+            mode: None,
+        })
+    }
+}
+
+/// The parent device that every `input` class device links to, so that the
+/// `device/subsystem` chain that libinput and udev-based enumeration expect
+/// resolves in sysfs.
+fn input_sysfs_parent() -> Arc<aster_device::BusDevice<super::platform::PlatformBus>> {
+    super::platform::parent()
+}
+
+/// Publishes an evdev device in the device model as
+/// `/sys/class/input/eventX`.
+fn add_input_sysfs_node(evdev: &Arc<EvdevDevice>) {
+    static INPUT_CLASS: Once<Arc<aster_device::ClassHandle<InputClass>>> = Once::new();
+
+    let class = INPUT_CLASS.call_once(|| {
+        aster_device::register_class(InputClass).expect("failed to register the input class")
+    });
+
+    let node = aster_device::ClassDevice::builder(
+        class,
+        format!("event{}", evdev.id.minor().get()),
+        evdev.clone(),
+    )
+    .parent(input_sysfs_parent())
+    .devnum(aster_device::DevNum::char(evdev.id))
+    .build();
+    if let Err(error) = aster_device::add(&node) {
+        ostd::warn!("failed to publish the evdev device in sysfs: {:?}", error);
+    }
+}
+
 /// Major device number for evdev devices.
 const EVDEV_MAJOR_ID: u16 = 13;
 
@@ -230,7 +280,9 @@ impl Device for EvdevClassDevice {
     }
 
     fn devtmpfs_meta(&self) -> Option<DevtmpfsNodeMeta> {
-        // The device model creates the node when the device is added.
+        // The device model creates the /dev/input/eventX node together with
+        // the sysfs topology (see `add_input_sysfs_node`); registering a
+        // second node here would duplicate it.
         None
     }
 
@@ -281,6 +333,10 @@ impl InputHandlerClass for EvdevHandlerClass {
             let _ = aster_device::remove(&device);
             return Err(ConnectError::InternalError);
         }
+
+        // Publish the device in the device model (sysfs topology) for
+        // udev/libinput based enumeration.
+        add_input_sysfs_node(&evdev);
 
         // Add to our registry for looking up during disconnection.
         EVDEV_DEVICES.lock().insert(minor_id, evdev.clone());
