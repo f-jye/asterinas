@@ -13,8 +13,8 @@ use aster_util::printer::VmPrinter;
 use ostd::{
     io::IoMem,
     mm::{
-        CachePolicy, Frame, FrameAllocOptions, HasSize, PageFlags, PageProperty, UFrame, VmSpace,
-        io::util::HasVmReaderWriter, tlb::TlbFlushOp, vm_space::VmQueriedItem,
+        CachePolicy, Frame, FrameAllocOptions, PageFlags, PageProperty, UFrame, VmSpace,
+        dma::DmaCoherent, io::util::HasVmReaderWriter, tlb::TlbFlushOp, vm_space::VmQueriedItem,
     },
     task::disable_preempt,
 };
@@ -216,8 +216,7 @@ impl VmMapping {
     pub(crate) fn rss_type(&self) -> RssType {
         match &self.mapped_mem {
             MappedMemory::Anonymous => RssType::Anon,
-            MappedMemory::Vmo(_) => RssType::File,
-            MappedMemory::Device(_) => MapHandle::DEVICE_RSS_TYPE,
+            MappedMemory::Vmo(_) | MappedMemory::Device | MappedMemory::Dma(_) => RssType::File,
         }
     }
 
@@ -230,7 +229,7 @@ impl VmMapping {
         let mapped_vmo = match &self.mapped_mem {
             MappedMemory::Vmo(mapped_vmo) => mapped_vmo,
             MappedMemory::Anonymous => return Ok(None),
-            MappedMemory::Device(_) => {
+            MappedMemory::Device | MappedMemory::Dma(_) => {
                 return_errno_with_message!(
                     Errno::EFAULT,
                     "shared futexes on device mappings are not supported"
@@ -246,9 +245,59 @@ impl VmMapping {
     /// Returns whether this mapping can be expanded.
     ///
     /// Device mappings cannot be expanded as they represent fixed-size MMIO
-    /// regions.
+    /// regions. DMA mappings are likewise fixed-size allocations.
     pub(super) fn can_expand(&self) -> bool {
-        !matches!(self.mapped_mem, MappedMemory::Device(_))
+        !matches!(self.mapped_mem, MappedMemory::Device | MappedMemory::Dma(_))
+    }
+
+    /// Returns the kind of memory backing this mapping.
+    pub(super) fn mapped_memory(&self) -> &MappedMemory {
+        &self.mapped_mem
+    }
+
+    /// Populates device memory for this mapping.
+    ///
+    /// This method should only be called for device memory mappings. It maps
+    /// the provided I/O memory region into the virtual address space.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, this method panics if the mapping is not a device
+    /// memory mapping.
+    pub(super) fn populate_device(&self, vm_space: &VmSpace, io_mem: IoMem, vmo_offset: usize) {
+        debug_assert!(matches!(self.mapped_mem, MappedMemory::Device));
+
+        let preempt_guard = disable_preempt();
+        let map_range = self.map_to_addr..self.map_to_addr + self.map_size.get();
+        let mut cursor = vm_space.cursor_mut(&preempt_guard, &map_range).unwrap();
+        let io_page_prop =
+            PageProperty::new_user(PageFlags::from(self.perms), io_mem.cache_policy());
+        cursor.map_iomem(io_mem, io_page_prop, self.map_size.get(), vmo_offset);
+    }
+
+    /// Populates DMA-coherent memory for this mapping.
+    ///
+    /// This method should only be called for DMA memory mappings. It maps the
+    /// DMA allocation into the virtual address space with the writeback cache
+    /// policy, which matches the kernel direct map of the same pages.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, this method panics if the mapping is not a DMA memory
+    /// mapping.
+    pub(super) fn populate_dma(&self, vm_space: &VmSpace, vmo_offset: usize) {
+        let MappedMemory::Dma(mapped_dma) = &self.mapped_mem else {
+            debug_assert!(false, "populate_dma called on a non-DMA mapping");
+            return;
+        };
+        let dma = mapped_dma.dma();
+
+        let preempt_guard = disable_preempt();
+        let map_range = self.map_to_addr..self.map_to_addr + self.map_size.get();
+        let mut cursor = vm_space.cursor_mut(&preempt_guard, &map_range).unwrap();
+        let io_page_prop =
+            PageProperty::new_user(PageFlags::from(self.perms), CachePolicy::Writeback);
+        cursor.map_dma(dma, io_page_prop, self.map_size.get(), vmo_offset);
     }
 
     /// Prints the mapping information in the format of `/proc/[pid]/maps`.
@@ -588,8 +637,9 @@ impl VmMapping {
                 // Anonymous mapping. Allocate a new frame.
                 return Ok((FrameAllocOptions::new().alloc_frame()?.into(), is_readonly));
             }
-            MappedMemory::Device(_) => {
-                // Device memory is populated when the memory mapping is created.
+            MappedMemory::Device | MappedMemory::Dma(_) => {
+                // Device and DMA memory are populated when the memory mapping
+                // is created.
                 return Err(VmoCommitError::Err(Error::with_message(
                     Errno::EFAULT,
                     "device memory page faults cannot be resolved",
@@ -894,7 +944,13 @@ pub(super) enum MappedMemory {
     ///
     /// These pages are associated with special files (typically device memory). They are populated
     /// when the memory mapping is created via mmap, instead of occurring at page faults.
-    Device(Box<dyn MappedObject>),
+    Device,
+    /// DMA-coherent memory.
+    ///
+    /// Like device memory, the pages are populated eagerly when the mapping is
+    /// created. The [`DmaCoherent`] allocation is owned by the mapped file, so
+    /// it stays alive as long as the mapping does.
+    Dma(MappedDma),
 }
 
 impl MappedMemory {
@@ -903,7 +959,8 @@ impl MappedMemory {
         match self {
             MappedMemory::Anonymous => MappedMemory::Anonymous,
             MappedMemory::Vmo(v) => MappedMemory::Vmo(v.dup()),
-            MappedMemory::Device(o) => MappedMemory::Device(o.dup()),
+            MappedMemory::Device => MappedMemory::Device,
+            MappedMemory::Dma(dma) => MappedMemory::Dma(dma.dup()),
         }
     }
 
@@ -920,10 +977,37 @@ impl MappedMemory {
                 let new_offset = offset + vmo.offset();
                 MappedMemory::Vmo(vmo.dup_at_offset(new_offset))
             }
-            MappedMemory::Device(mapped_obj) => {
-                MappedMemory::Device(mapped_obj.dup_at_offset(offset))
-            }
+            MappedMemory::Device => MappedMemory::Device,
+            MappedMemory::Dma(dma) => MappedMemory::Dma(dma.dup_at_offset(offset)),
         }
+    }
+}
+
+/// A wrapper that represents a mapped [`DmaCoherent`] allocation.
+#[derive(Debug)]
+pub(super) struct MappedDma {
+    dma: Arc<DmaCoherent>,
+}
+
+impl MappedDma {
+    /// Creates a `MappedDma` used for the mapping.
+    pub(super) fn new(dma: Arc<DmaCoherent>) -> Self {
+        Self { dma }
+    }
+
+    /// Returns the mapped [`DmaCoherent`] allocation.
+    pub(super) fn dma(&self) -> &Arc<DmaCoherent> {
+        &self.dma
+    }
+
+    fn dup(&self) -> Self {
+        Self {
+            dma: self.dma.clone(),
+        }
+    }
+
+    fn dup_at_offset(&self, _offset: usize) -> Self {
+        self.dup()
     }
 }
 
