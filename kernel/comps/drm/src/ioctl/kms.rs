@@ -300,6 +300,14 @@ pub(super) mod abi {
         pub value: u64,
         pub name: [u8; 32],
     }
+
+    /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L1533>.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Pod)]
+    pub struct ModeCloseFb {
+        pub fb_id: u32,
+        pub pad: u32,
+    }
 }
 
 impl DrmFile {
@@ -612,6 +620,21 @@ impl DrmFile {
         }
         let mut current = kms.current_fb().lock();
         if *current == Some(fb_id) {
+            *current = None;
+        }
+        Ok(0)
+    }
+
+    /// `DRM_IOCTL_MODE_CLOSEFB`: the modern equivalent of `RMFB`, taking the
+    /// framebuffer id in a struct instead of a bare `unsigned int`.
+    pub(super) fn mode_close_fb(&self, cmd: DrmIoctlModeCloseFb) -> Result<i32> {
+        let args: abi::ModeCloseFb = cmd.read()?;
+        let kms = self.minor().registered_device().kms().lock();
+        if kms.fbs().lock().remove(&args.fb_id).is_none() {
+            return_errno_with_message!(Errno::ENOENT, "no such framebuffer");
+        }
+        let mut current = kms.current_fb().lock();
+        if *current == Some(args.fb_id) {
             *current = None;
         }
         Ok(0)
