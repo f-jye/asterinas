@@ -2,23 +2,60 @@
 
 //! Minimal kernel mode-setting ioctls backed by the boot framebuffer.
 //!
-//! The scanout framebuffer doubles as the only dumb buffer: `CREATE_DUMB`
-//! hands out an alias of it, `MAP_DUMB` maps offset zero, and `SETCRTC`
-//! simply records the framebuffer that user space has bound to the CRTC.
-//! Writes to the mapped buffer are therefore visible on the display without
-//! any copy step.
+//! User space renders into dumb buffers carved out of a device-wide DMA
+//! arena (see [`crate::gem`]) and submits them as framebuffers through
+//! `ADDFB`/`ADDBFB2`. Binding a framebuffer to the CRTC via `SETCRTC` or
+//! presenting it with `PAGE_FLIP` copies its lines into the fixed-geometry
+//! boot scanout, so whatever buffer user space bound last is what the
+//! display shows. Page flip completions are delivered as DRM events that
+//! user space reads from the DRM file descriptor.
 
-use alloc::{format, sync::Arc};
+use alloc::{boxed::Box, format, sync::Arc};
+use core::sync::atomic::Ordering;
 
 use aster_core::{prelude::*, util::ioctl::write_user_value};
 use aster_framebuffer::framebuffer::FrameBuffer;
-use ostd::mm::HasSize;
+use ostd::timer::Jiffies;
+use ostd_pod::IntoBytes;
 
 use super::{
-    super::device::{CONNECTOR_ID, CRTC_ID, ENCODER_ID, KmsFb},
+    super::{
+        device::{CONNECTOR_ID, CRTC_ID, ENCODER_ID, Kms, KmsFb},
+        gem::Gem,
+    },
     ioctl_defs::*,
 };
 use crate::file::DrmFile;
+
+/// `DRM_FORMAT_XRGB8888`.
+const FORMAT_XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
+/// `DRM_FORMAT_ARGB8888`.
+const FORMAT_ARGB8888: u32 = u32::from_le_bytes(*b"AR24");
+/// `DRM_FORMAT_MOD_LINEAR`.
+const MODIFIER_LINEAR: u64 = 0;
+/// `DRM_FORMAT_MOD_INVALID`, which Linux passes when modifiers are unused.
+const MODIFIER_INVALID: u64 = (1 << 56) - 1;
+/// `DRM_MODE_PAGE_FLIP_EVENT`: report completion through a DRM event.
+const PAGE_FLIP_EVENT: u32 = 0x1;
+/// `DRM_MODE_PAGE_FLIP_ASYNC`: flip as soon as possible.
+const PAGE_FLIP_ASYNC: u32 = 0x2;
+/// `DRM_EVENT_FLIP_COMPLETE`.
+const EVENT_FLIP_COMPLETE: u32 = 0x2;
+
+/// The payload of a page flip completion event, matching Linux's
+/// `struct drm_event_vblank` (with the `crtc_id` field Linux always writes).
+#[padding_struct]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod)]
+struct FlipEvent {
+    type_: u32,
+    length: u32,
+    user_data: u64,
+    tv_sec: u64,
+    tv_usec: u32,
+    sequence: u32,
+    crtc_id: u32,
+}
 
 /// Modesetting ioctl argument layouts, transcribed from Linux's
 /// `include/uapi/drm/drm_mode.h`.
@@ -123,6 +160,41 @@ pub(super) mod abi {
         pub handle: u32,
     }
 
+    /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L669>.
+    #[padding_struct]
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Pod)]
+    pub struct ModeFbCmd2 {
+        pub fb_id: u32,
+        pub width: u32,
+        pub height: u32,
+        pub pixel_format: u32,
+        pub flags: u32,
+        pub handles: [u32; 4],
+        pub pitches: [u32; 4],
+        pub offsets: [u32; 4],
+        pub modifier: [u64; 4],
+    }
+
+    /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L851>.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Pod)]
+    pub struct ModeCrtcPageFlip {
+        pub crtc_id: u32,
+        pub fb_id: u32,
+        pub flags: u32,
+        pub reserved: u32,
+        pub user_data: u64,
+    }
+
+    /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm.h#L607>.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Pod)]
+    pub struct GemClose {
+        pub handle: u32,
+        pub pad: u32,
+    }
+
     /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L1250>.
     #[repr(C)]
     #[derive(Clone, Copy, Debug, Default, Pod)]
@@ -207,6 +279,42 @@ impl DrmFile {
             .device()
             .scanout()
             .ok_or_else(|| Error::with_message(Errno::EOPNOTSUPP, "the device has no scanout"))
+    }
+
+    /// The dumb buffer arena of the device, allocating it on first use.
+    fn gem_or_err(&self) -> Result<Arc<Gem>> {
+        self.minor().registered_device().kms().lock().gem()
+    }
+
+    /// Validates a framebuffer request against its backing dumb buffer and
+    /// registers it, returning the new framebuffer id.
+    fn register_fb(&self, fb: KmsFb) -> Result<u32> {
+        let gem = self.gem_or_err()?;
+        let Some(buffer) = gem.buffer(fb.handle) else {
+            return_errno_with_message!(Errno::ENOENT, "no such dumb buffer");
+        };
+        if fb.width != buffer.width || fb.height != buffer.height || fb.pitch != buffer.pitch {
+            return_errno_with_message!(Errno::EINVAL, "the framebuffer mismatches its buffer");
+        }
+
+        let kms = self.minor().registered_device().kms().lock();
+        let fb_id = kms.alloc_fb_id();
+        kms.fbs().lock().insert(fb_id, fb);
+        Ok(fb_id)
+    }
+
+    /// Presents the framebuffer on the scanout, if presentation is possible.
+    ///
+    /// The caller passes the device's KMS state; presentation must not
+    /// re-lock it.
+    fn present(&self, kms: &Kms, fb: &KmsFb) {
+        let Some(scanout) = self.minor().device().scanout() else {
+            return;
+        };
+        let Some(gem) = kms.loaded_gem() else {
+            return;
+        };
+        gem.present(&scanout, fb);
     }
 
     pub(super) fn mode_get_resources(&self, cmd: DrmIoctlModeGetResources) -> Result<i32> {
@@ -314,53 +422,95 @@ impl DrmFile {
         if args.crtc_id != CRTC_ID {
             return_errno_with_message!(Errno::ENOENT, "no such CRTC");
         }
-        if args.fb_id != 0
-            && !self
-                .minor()
-                .registered_device()
-                .kms()
-                .lock()
-                .fbs()
-                .lock()
-                .contains_key(&args.fb_id)
-        {
-            return_errno_with_message!(Errno::ENOENT, "no such framebuffer");
+
+        let registered = self.minor().registered_device();
+        let kms = registered.kms().lock();
+        let fb = if args.fb_id != 0 {
+            Some(
+                *kms.fbs()
+                    .lock()
+                    .get(&args.fb_id)
+                    .ok_or_else(|| Error::with_message(Errno::ENOENT, "no such framebuffer"))?,
+            )
+        } else {
+            None
+        };
+
+        if let Some(fb) = &fb {
+            self.present(&kms, fb);
         }
-        // The scanout is fixed; binding a framebuffer only records which dumb
-        // buffer user space presents.
-        let kms = self.minor().registered_device().kms().lock();
+        // Binding a framebuffer records which dumb buffer user space
+        // presents; the scanout itself has a fixed geometry.
         *kms.current_fb().lock() = (args.fb_id != 0).then_some(args.fb_id);
         Ok(0)
     }
 
     pub(super) fn mode_add_fb(&self, cmd: DrmIoctlAddFb) -> Result<i32> {
-        let scanout = self.scanout_or_err()?;
+        let _scanout = self.scanout_or_err()?;
         let mut args: abi::ModeFbCmd = cmd.read()?;
 
-        // Every dumb buffer aliases the scanout, so the only handle that can
-        // appear here is the scanout's own.
-        if args.handle != 1 {
-            return_errno_with_message!(Errno::ENOENT, "no such dumb buffer");
-        }
-        if args.width != scanout.width() as u32
-            || args.height != scanout.height() as u32
-            || args.pitch != scanout.line_size() as u32
-        {
-            return_errno_with_message!(Errno::EINVAL, "the framebuffer mismatches the scanout");
-        }
+        // Legacy ADDFB identifies the format by depth/bpp; derive the fourcc
+        // the way Linux's framebuffer lookup does.
+        let format = match (args.depth, args.bpp) {
+            (24, 32) => FORMAT_XRGB8888,
+            (32, 32) => FORMAT_ARGB8888,
+            _ => {
+                return_errno_with_message!(Errno::EINVAL, "the framebuffer format is unsupported")
+            }
+        };
 
-        let kms = self.minor().registered_device().kms().lock();
-        args.fb_id = kms.alloc_fb_id();
-        kms.fbs().lock().insert(
-            args.fb_id,
-            KmsFb {
-                width: args.width,
-                height: args.height,
-                pitch: args.pitch,
-                bpp: args.bpp,
-                depth: args.depth,
-            },
-        );
+        args.fb_id = self.register_fb(KmsFb {
+            width: args.width,
+            height: args.height,
+            pitch: args.pitch,
+            bpp: args.bpp,
+            depth: args.depth,
+            format,
+            handle: args.handle,
+        })?;
+        cmd.write(&args)?;
+        Ok(0)
+    }
+
+    pub(super) fn mode_add_fb2(&self, cmd: DrmIoctlAddFb2) -> Result<i32> {
+        let _scanout = self.scanout_or_err()?;
+        let mut args: abi::ModeFbCmd2 = cmd.read()?;
+
+        if args.flags != 0 {
+            return_errno_with_message!(Errno::EINVAL, "framebuffer flags are unsupported");
+        }
+        // Only single-plane, linearly addressed framebuffers are supported.
+        if args.handles[1..].iter().any(|handle| *handle != 0)
+            || args.offsets[0] != 0
+            || args.offsets[1..].iter().any(|offset| *offset != 0)
+        {
+            return_errno_with_message!(Errno::EINVAL, "multi-plane framebuffers are unsupported");
+        }
+        // Only the first plane carries a modifier for our single-plane
+        // framebuffers; Linux userspace leaves the unused entries zero or
+        // fills them with INVALID.
+        let modifier = args.modifier[0];
+        if modifier != MODIFIER_LINEAR && modifier != MODIFIER_INVALID {
+            return_errno_with_message!(Errno::EINVAL, "the framebuffer modifiers are unsupported");
+        }
+        let format = match args.pixel_format {
+            FORMAT_XRGB8888 => FORMAT_XRGB8888,
+            FORMAT_ARGB8888 => FORMAT_ARGB8888,
+            _ => {
+                return_errno_with_message!(Errno::EINVAL, "the framebuffer format is unsupported")
+            }
+        };
+        let depth = if format == FORMAT_ARGB8888 { 32 } else { 24 };
+
+        args.fb_id = self.register_fb(KmsFb {
+            width: args.width,
+            height: args.height,
+            pitch: args.pitches[0],
+            bpp: 32,
+            depth,
+            format,
+            handle: args.handles[0],
+        })?;
         cmd.write(&args)?;
         Ok(0)
     }
@@ -377,7 +527,7 @@ impl DrmFile {
         out.pitch = fb.pitch;
         out.bpp = fb.bpp;
         out.depth = fb.depth;
-        out.handle = 1;
+        out.handle = fb.handle;
         cmd.write(&out)?;
         Ok(0)
     }
@@ -385,7 +535,9 @@ impl DrmFile {
     pub(super) fn mode_rm_fb(&self, cmd: DrmIoctlRmFb) -> Result<i32> {
         let fb_id: u32 = cmd.read()?;
         let kms = self.minor().registered_device().kms().lock();
-        kms.fbs().lock().remove(&fb_id);
+        if kms.fbs().lock().remove(&fb_id).is_none() {
+            return_errno_with_message!(Errno::ENOENT, "no such framebuffer");
+        }
         let mut current = kms.current_fb().lock();
         if *current == Some(fb_id) {
             *current = None;
@@ -393,46 +545,82 @@ impl DrmFile {
         Ok(0)
     }
 
-    pub(super) fn mode_create_dumb(&self, cmd: DrmIoctlCreateDumb) -> Result<i32> {
-        let scanout = self.scanout_or_err()?;
-        let mut args: abi::ModeCreateDumb = cmd.read()?;
-
-        if args.width != scanout.width() as u32
-            || args.height != scanout.height() as u32
-            || args.bpp != 32
-            || args.flags != 0
-        {
-            return_errno_with_message!(
-                Errno::EINVAL,
-                "only the native 32bpp scanout size is supported"
-            );
+    pub(super) fn mode_page_flip(&self, cmd: DrmIoctlModePageFlip) -> Result<i32> {
+        let args: abi::ModeCrtcPageFlip = cmd.read()?;
+        if args.crtc_id != CRTC_ID {
+            return_errno_with_message!(Errno::ENOENT, "no such CRTC");
         }
-        // The returned buffer aliases the scanout, so the pitch and size come
-        // from the framebuffer, and the fixed handle identifies the alias.
-        args.handle = 1;
-        args.pitch = scanout.line_size() as u32;
-        args.size = scanout.io_mem().size() as u64;
+        if args.reserved != 0 || args.flags & !(PAGE_FLIP_EVENT | PAGE_FLIP_ASYNC) != 0 {
+            return_errno_with_message!(Errno::EINVAL, "invalid page flip flags");
+        }
+
+        let registered = self.minor().registered_device();
+        let kms = registered.kms().lock();
+        let Some(fb) = kms.fbs().lock().get(&args.fb_id).copied() else {
+            return_errno_with_message!(Errno::ENOENT, "no such framebuffer");
+        };
+
+        self.present(&kms, &fb);
+        *kms.current_fb().lock() = Some(args.fb_id);
+
+        if args.flags & PAGE_FLIP_EVENT != 0 {
+            let elapsed = Jiffies::elapsed().as_duration();
+            // The padding fields added by `padding_struct` are not part of
+            // the wire format, so they are filled through `Default`.
+            let event = FlipEvent {
+                type_: EVENT_FLIP_COMPLETE,
+                length: size_of::<FlipEvent>() as u32,
+                user_data: args.user_data,
+                tv_sec: elapsed.as_secs(),
+                tv_usec: elapsed.subsec_micros(),
+                sequence: kms.flip_sequence().fetch_add(1, Ordering::Relaxed),
+                crtc_id: CRTC_ID,
+                ..FlipEvent::default()
+            };
+            self.queue_event(Box::from(event.as_bytes()));
+        }
+        Ok(0)
+    }
+
+    pub(super) fn mode_create_dumb(&self, cmd: DrmIoctlCreateDumb) -> Result<i32> {
+        let _scanout = self.scanout_or_err()?;
+        let mut args: abi::ModeCreateDumb = cmd.read()?;
+        if args.flags != 0 {
+            return_errno_with_message!(Errno::EINVAL, "dumb buffer flags are unsupported");
+        }
+
+        let gem = self.gem_or_err()?;
+        let (handle, pitch, size) = gem.create_buffer(args.width, args.height, args.bpp)?;
+        args.handle = handle;
+        args.pitch = pitch;
+        args.size = size;
         cmd.write(&args)?;
         Ok(0)
     }
 
     pub(super) fn mode_map_dumb(&self, cmd: DrmIoctlMapDumb) -> Result<i32> {
         let args: abi::ModeMapDumb = cmd.read()?;
-        if args.handle != 1 {
-            return_errno_with_message!(Errno::ENOENT, "no such dumb buffer");
-        }
-        // Offset zero makes the DRM file's mmap cover the whole scanout.
+        let gem = self.gem_or_err()?;
+
+        // The DRM file maps the whole arena, so the buffer's offset inside
+        // the arena is the offset user space passes to `mmap`.
         let mut out = args;
-        out.offset = 0;
+        out.offset = gem.map_offset(args.handle)? as u64;
         cmd.write(&out)?;
         Ok(0)
     }
 
     pub(super) fn mode_destroy_dumb(&self, cmd: DrmIoctlDestroyDumb) -> Result<i32> {
         let args: abi::ModeCreateDumb = cmd.read()?;
-        if args.handle != 1 {
-            return_errno_with_message!(Errno::ENOENT, "no such dumb buffer");
-        }
+        let gem = self.gem_or_err()?;
+        gem.destroy_buffer(args.handle)?;
+        Ok(0)
+    }
+
+    pub(super) fn gem_close(&self, cmd: DrmIoctlGemClose) -> Result<i32> {
+        let args: abi::GemClose = cmd.read()?;
+        let gem = self.gem_or_err()?;
+        gem.destroy_buffer(args.handle)?;
         Ok(0)
     }
 

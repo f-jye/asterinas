@@ -64,28 +64,40 @@ impl DrmFile {
                 self.mode_get_connector(cmd)
             }
             cmd @ DrmIoctlModeGetFb => {
-                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.check_ioctl_requirements(DrmIoctlAccess::RENDER_ALLOW, DrmFeatures::MODESET)?;
                 self.mode_get_fb(cmd)
             }
             cmd @ DrmIoctlAddFb => {
-                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.check_ioctl_requirements(DrmIoctlAccess::RENDER_ALLOW, DrmFeatures::MODESET)?;
                 self.mode_add_fb(cmd)
             }
+            cmd @ DrmIoctlAddFb2 => {
+                self.check_ioctl_requirements(DrmIoctlAccess::RENDER_ALLOW, DrmFeatures::MODESET)?;
+                self.mode_add_fb2(cmd)
+            }
             cmd @ DrmIoctlRmFb => {
-                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.check_ioctl_requirements(DrmIoctlAccess::RENDER_ALLOW, DrmFeatures::MODESET)?;
                 self.mode_rm_fb(cmd)
             }
+            cmd @ DrmIoctlModePageFlip => {
+                self.check_ioctl_requirements(DrmIoctlAccess::MASTER, DrmFeatures::MODESET)?;
+                self.mode_page_flip(cmd)
+            }
             cmd @ DrmIoctlCreateDumb => {
-                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.check_ioctl_requirements(DrmIoctlAccess::RENDER_ALLOW, DrmFeatures::MODESET)?;
                 self.mode_create_dumb(cmd)
             }
             cmd @ DrmIoctlMapDumb => {
-                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.check_ioctl_requirements(DrmIoctlAccess::RENDER_ALLOW, DrmFeatures::MODESET)?;
                 self.mode_map_dumb(cmd)
             }
             cmd @ DrmIoctlDestroyDumb => {
-                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.check_ioctl_requirements(DrmIoctlAccess::RENDER_ALLOW, DrmFeatures::MODESET)?;
                 self.mode_destroy_dumb(cmd)
+            }
+            cmd @ DrmIoctlGemClose => {
+                self.check_ioctl_requirements(DrmIoctlAccess::RENDER_ALLOW, DrmFeatures::MODESET)?;
+                self.gem_close(cmd)
             }
             cmd @ DrmIoctlObjGetProps => {
                 self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
@@ -170,8 +182,9 @@ mod ioctl_defs {
     use super::{
         general::{DrmAuth, DrmGetCap, DrmSetClientCap, DrmUnique, DrmVersion},
         kms::abi::{
-            ModeCardRes, ModeCreateDumb, ModeCrtc, ModeFbCmd, ModeGetConnector, ModeGetEncoder,
-            ModeListLessees, ModeMapDumb, ModeObjGetProps,
+            GemClose, ModeCardRes, ModeCreateDumb, ModeCrtc, ModeCrtcPageFlip, ModeFbCmd,
+            ModeFbCmd2, ModeGetConnector, ModeGetEncoder, ModeListLessees, ModeMapDumb,
+            ModeObjGetProps,
         },
     };
 
@@ -203,14 +216,20 @@ mod ioctl_defs {
         ioc!(DRM_IOCTL_MODE_GETFB, b'd', 0xAD, InOutData<ModeFbCmd>);
     pub(super) type DrmIoctlAddFb = ioc!(DRM_IOCTL_MODE_ADDFB, b'd', 0xAE, InOutData<ModeFbCmd>);
     pub(super) type DrmIoctlRmFb = ioc!(DRM_IOCTL_MODE_RMFB, b'd', 0xAF, InData<u32>);
+    pub(super) type DrmIoctlModePageFlip =
+        ioc!(DRM_IOCTL_MODE_PAGE_FLIP, b'd', 0xB0, InOutData<ModeCrtcPageFlip>);
     pub(super) type DrmIoctlCreateDumb =
         ioc!(DRM_IOCTL_MODE_CREATE_DUMB, b'd', 0xB2, InOutData<ModeCreateDumb>);
     pub(super) type DrmIoctlMapDumb =
         ioc!(DRM_IOCTL_MODE_MAP_DUMB, b'd', 0xB3, InOutData<ModeMapDumb>);
     pub(super) type DrmIoctlDestroyDumb =
         ioc!(DRM_IOCTL_MODE_DESTROY_DUMB, b'd', 0xB4, InData<ModeCreateDumb>);
+    pub(super) type DrmIoctlAddFb2 =
+        ioc!(DRM_IOCTL_MODE_ADDBFB2, b'd', 0xB8, InOutData<ModeFbCmd2>);
     pub(super) type DrmIoctlObjGetProps =
         ioc!(DRM_IOCTL_MODE_OBJ_GETPROPS, b'd', 0xB9, InOutData<ModeObjGetProps>);
     pub(super) type DrmIoctlListLessees =
         ioc!(DRM_IOCTL_MODE_LIST_LESSEES, b'd', 0xC7, InOutData<ModeListLessees>);
+    pub(super) type DrmIoctlGemClose =
+        ioc!(DRM_IOCTL_GEM_CLOSE, b'd', 0x09, InOutData<GemClose>);
 }
