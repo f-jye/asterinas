@@ -168,4 +168,4 @@ impl<B: Bus> DeviceInternals for BusDevice<B> {
     }
 }
 
-impl_device_node!(BusDevice, (B: Bus), (B));
+impl_device_node!(BusDevice<B: Bus>);

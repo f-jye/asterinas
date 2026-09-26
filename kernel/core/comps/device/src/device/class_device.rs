@@ -150,4 +150,4 @@ impl<C: Class> DeviceInternals for ClassDevice<C> {
     }
 }
 
-impl_device_node!(ClassDevice, (C: Class), (C));
+impl_device_node!(ClassDevice<C: Class>);
