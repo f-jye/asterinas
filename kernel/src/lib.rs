@@ -13,6 +13,8 @@
 // to ensure that its component registration and initialization code are linked into
 // the kernel, because the assembler does not otherwise reference symbols from that crate.
 extern crate aster_drm as _;
+extern crate aster_i2c as _;
+extern crate aster_i2c_hid as _;
 extern crate aster_simpledrm as _;
 extern crate aster_uart as _;
 

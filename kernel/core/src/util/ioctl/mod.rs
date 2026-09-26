@@ -730,7 +730,9 @@ mod test {
 /// public entry point.
 pub fn write_user_value<T: Pod>(addr: usize, val: &T) -> Result<()> {
     use ostd::mm::VmIo;
-    current_userspace!().write_val(addr, val).map_err(Error::from)
+    current_userspace!()
+        .write_val(addr, val)
+        .map_err(Error::from)
 }
 
 /// Reads a value from the current task's user space at `addr`.

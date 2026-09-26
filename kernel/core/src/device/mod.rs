@@ -68,10 +68,12 @@ pub(crate) fn init_in_first_kthread() {
 /// this bus get the `device/subsystem` sysfs chain that user space expects.
 pub(super) mod platform {
     use alloc::sync::Arc;
+
     use aster_device::{Bus, BusDevice, BusHandle};
     use spin::Once;
 
     /// The `platform` bus.
+    #[expect(dead_code)]
     pub(super) struct PlatformBus;
 
     impl Bus for PlatformBus {
@@ -85,16 +87,17 @@ pub(super) mod platform {
     }
 
     /// Returns the registered platform bus, registering it on first use.
+    #[expect(dead_code)]
     pub(super) fn bus() -> &'static Arc<BusHandle<PlatformBus>> {
         static BUS: Once<Arc<BusHandle<PlatformBus>>> = Once::new();
         BUS.call_once(|| {
-            aster_device::register_bus(PlatformBus)
-                .expect("failed to register the platform bus")
+            aster_device::register_bus(PlatformBus).expect("failed to register the platform bus")
         })
     }
 
     /// Returns the shared parent device for virtual peripherals, creating it
     /// on first use.
+    #[expect(dead_code)]
     pub(super) fn parent() -> Arc<BusDevice<PlatformBus>> {
         static PARENT: Once<Arc<BusDevice<PlatformBus>>> = Once::new();
         PARENT

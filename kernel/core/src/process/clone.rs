@@ -244,7 +244,9 @@ impl CloneArgs {
         if !clone_flags.contains(CloneFlags::CLONE_UNTRACED)
             && ctx.posix_thread.needs_ptrace_clone_stop(self)
         {
-            ostd::warn!("clone-family ptrace events are not supported; cloning without the ptrace stop");
+            ostd::warn!(
+                "clone-family ptrace events are not supported; cloning without the ptrace stop"
+            );
         }
 
         Ok(())
