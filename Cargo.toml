@@ -29,6 +29,8 @@ members = [
     "kernel",
     "kernel/comps/drm",
     "kernel/comps/simpledrm",
+    "kernel/comps/i2c",
+    "kernel/comps/i2c-hid",
     "kernel/comps/uart",
     "kernel/core",
     "kernel/core/comps/block",
@@ -47,6 +49,7 @@ members = [
     "kernel/core/comps/systree",
     "kernel/core/comps/time",
     "kernel/core/comps/virtio",
+    "kernel/libs/aster-acpi",
     "kernel/libs/aster-bigtcp",
     "kernel/libs/aster-fuse",
     "kernel/libs/aster-rights",
@@ -84,6 +87,8 @@ default-members = [
     "kernel",
     "kernel/comps/drm",
     "kernel/comps/simpledrm",
+    "kernel/comps/i2c",
+    "kernel/comps/i2c-hid",
     "kernel/comps/uart",
     "kernel/core",
     "kernel/core/comps/block",
@@ -102,6 +107,7 @@ default-members = [
     "kernel/core/comps/systree",
     "kernel/core/comps/time",
     "kernel/core/comps/virtio",
+    "kernel/libs/aster-acpi",
     "kernel/libs/aster-bigtcp",
     "kernel/libs/aster-fuse",
     "kernel/libs/aster-util",
@@ -130,7 +136,6 @@ exclude = [
 [workspace.lints.rust]
 redundant_imports = "warn"
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(ktest)'] }
-unreachable_pub = "warn"
 unused_qualifications = "warn"
 
 [workspace.lints.clippy]
@@ -170,6 +175,8 @@ aster-core = { path = "kernel/core", default-features = false }
 # Crates under kernel/comps
 aster-drm = { path = "kernel/comps/drm" }
 aster-simpledrm = { path = "kernel/comps/simpledrm" }
+aster-i2c = { path = "kernel/comps/i2c" }
+aster-i2c-hid = { path = "kernel/comps/i2c-hid" }
 aster-uart = { path = "kernel/comps/uart" }
 
 # Crates under kernel/core/comps
@@ -191,6 +198,7 @@ aster-time = { path = "kernel/core/comps/time" }
 aster-virtio = { path = "kernel/core/comps/virtio" }
 
 # Crates under kernel/libs
+aster-acpi = { path = "kernel/libs/aster-acpi" }
 aster-bigtcp = { path = "kernel/libs/aster-bigtcp" }
 aster-fuse = { path = "kernel/libs/aster-fuse" }
 aster-rights = { path = "kernel/libs/aster-rights" }

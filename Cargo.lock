@@ -77,6 +77,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "aster-acpi"
+version = "0.1.0"
+
+[[package]]
 name = "aster-bigtcp"
 version = "0.1.0"
 dependencies = [
@@ -100,9 +104,9 @@ version = "0.1.0"
 dependencies = [
  "align_ext",
  "aster-util",
+ "bitvec",
  "component",
  "device-id",
- "dma-pool",
  "id-alloc",
  "int-to-c-enum",
  "io-util",
@@ -233,7 +237,6 @@ dependencies = [
 name = "aster-framebuffer"
 version = "0.1.0"
 dependencies = [
- "align_ext",
  "bitflags 1.3.2",
  "component",
  "font8x8",
@@ -251,6 +254,30 @@ dependencies = [
  "ostd",
  "ostd-pod",
  "zerocopy",
+]
+
+[[package]]
+name = "aster-i2c"
+version = "0.1.0"
+dependencies = [
+ "aster-acpi",
+ "aster-core",
+ "aster-device",
+ "component",
+ "ostd",
+ "spin",
+]
+
+[[package]]
+name = "aster-i2c-hid"
+version = "0.1.0"
+dependencies = [
+ "aster-core",
+ "aster-device",
+ "aster-i2c",
+ "aster-input",
+ "component",
+ "ostd",
 ]
 
 [[package]]
@@ -397,7 +424,6 @@ dependencies = [
  "aster-util",
  "bitflags 2.13.2",
  "component",
- "id-alloc",
  "inherit-methods-macro",
  "ostd",
  "spin",
@@ -421,7 +447,6 @@ name = "aster-uart"
 version = "0.1.0"
 dependencies = [
  "aster-console",
- "aster-util",
  "component",
  "fdt",
  "fdt-util",
@@ -436,7 +461,6 @@ version = "0.1.0"
 dependencies = [
  "aster-rights",
  "aster-rights-proc",
- "bitvec",
  "inherit-methods-macro",
  "osdk-heap-allocator",
  "ostd",
@@ -470,7 +494,6 @@ dependencies = [
  "io-util",
  "ostd",
  "ostd-pod",
- "short-vis-path",
  "smallvec",
  "spin",
  "tdx-guest",
