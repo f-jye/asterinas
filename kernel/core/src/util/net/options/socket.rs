@@ -11,7 +11,7 @@ use crate::{
     net::socket::options::{
         AcceptConn, AttachFilter, Broadcast, DetachFilter, Error, KeepAlive, Linger, PassCred,
         PeerCred, PeerGroups, Priority, RecvBuf, RecvBufForce, RecvTimeout, ReuseAddr, ReusePort,
-        SendBuf, SendBufForce, SendTimeout, SocketOption, SocketType,
+        SendBuf, SendBufForce, SendTimeout, SocketOption, SocketType, Timestamp,
     },
     process::Gid,
     prelude::*,
@@ -42,6 +42,7 @@ enum CSocketOptionName {
     REUSEPORT = 15,
     PASSCRED = 16,
     PEERCRED = 17,
+    TIMESTAMP = 29,
     RCVTIMEO_OLD = 20,
     SNDTIMEO_OLD = 21,
     ATTACH_FILTER = 26,
@@ -79,6 +80,7 @@ pub(crate) fn new_socket_option(name: i32) -> Result<Box<dyn RawSocketOption>> {
         CSocketOptionName::REUSEPORT => Ok(Box::new(ReusePort::new())),
         CSocketOptionName::PASSCRED => Ok(Box::new(PassCred::new())),
         CSocketOptionName::PEERCRED => Ok(Box::new(PeerCred::new())),
+        CSocketOptionName::TIMESTAMP => Ok(Box::new(Timestamp::new())),
         CSocketOptionName::ACCPETCONN => Ok(Box::new(AcceptConn::new())),
         CSocketOptionName::SNDBUFFORCE => Ok(Box::new(SendBufForce::new())),
         CSocketOptionName::RCVBUFFORCE => Ok(Box::new(RecvBufForce::new())),
@@ -102,6 +104,7 @@ impl_raw_socket_option!(RecvTimeout);
 impl_raw_socket_option!(SendTimeout);
 impl_raw_socket_option!(ReusePort);
 impl_raw_socket_option!(PassCred);
+impl_raw_socket_option!(Timestamp);
 impl_raw_sock_option_get_only!(PeerCred);
 impl_raw_sock_option_get_only!(AcceptConn);
 impl_raw_socket_option!(SendBufForce);

@@ -83,6 +83,19 @@ KERNEL_SUCCESS_EXIT_CODE=16 # 0x10 in hexadecimal
 # process exit code using following formula.
 QEMU_SUCCESS_EXIT_CODE=$(((KERNEL_SUCCESS_EXIT_CODE << 1) | 1))
 
+# Optional automation hooks, disabled by default:
+# - NIXOS_QMP_SOCKET: expose a QMP monitor on the given unix socket.
+# - NIXOS_MUX_SOCKET: serve the monitor/console mux (hvc0 with the default
+#   console settings) on the given unix socket instead of stdio, so scripts
+#   can interact with the guest.
+if [ -n "${NIXOS_QMP_SOCKET}" ]; then
+    QEMU_ARGS="${QEMU_ARGS} -qmp unix:${NIXOS_QMP_SOCKET},server=on,wait=off"
+fi
+if [ -n "${NIXOS_MUX_SOCKET}" ]; then
+    QEMU_ARGS=$(printf '%s\n' "$QEMU_ARGS" | sed \
+        -e "s|stdio,id=mux,mux=on,signal=off,logfile=qemu.log|socket,id=mux,mux=on,path=${NIXOS_MUX_SOCKET},server=on,wait=off,logfile=qemu.log|")
+fi
+
 # Execute QEMU
 # shellcheck disable=SC2086
 ${QEMU_BIN} ${QEMU_ARGS} || exit_code=$?
