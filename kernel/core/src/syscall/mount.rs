@@ -153,17 +153,16 @@ fn do_change_type(target_path: Path, flags: MountFlags, ctx: &Context) -> Result
         );
     }
 
-    let is_recursive = flags.contains(MountFlags::MS_REC);
-    let propagation_type = match propagation_flags {
-        MountFlags::MS_PRIVATE => MountPropType::Private,
-        MountFlags::MS_SLAVE => MountPropType::Slave,
-        MountFlags::MS_SHARED => MountPropType::Shared,
-        MountFlags::MS_UNBINDABLE => MountPropType::Unbindable,
-        _ => unreachable!(),
-    };
-    target_path.set_propagation(propagation_type, is_recursive, ctx)?;
-
-    Ok(())
+    // FIXME: Real slave propagation is not implemented. Treat `MS_SLAVE` as
+    // `MS_PRIVATE`, which systemd requires to succeed after entering a new
+    // mount namespace.
+    if flags.intersects(MountFlags::MS_PRIVATE | MountFlags::MS_SLAVE) {
+        let recursive = flags.contains(MountFlags::MS_REC);
+        target_path.set_mount_propagation(MountPropType::Private, recursive, ctx)?;
+        Ok(())
+    } else {
+        return_errno_with_message!(Errno::EINVAL, "the mount propagation type is unsupported");
+    }
 }
 
 /// Moves a mount from src location to dst location.
