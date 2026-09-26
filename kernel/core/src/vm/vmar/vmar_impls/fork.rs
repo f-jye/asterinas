@@ -108,10 +108,19 @@ fn cow_copy_pt(src: &mut CursorMut<'_>, dst: &mut CursorMut<'_>, size: usize) ->
                 num_copied += 1;
             }
             VmQueriedItem::MappedIoMem { paddr, prop } => {
-                // For MMIO pages, find the corresponding `IoMem` and map it
-                let (iomem, offset) = src.find_iomem_by_paddr(paddr).unwrap();
-                dst.jump(mapped_va).unwrap();
-                dst.map_iomem(iomem, prop, PAGE_SIZE, offset);
+                // For MMIO pages, find the corresponding `IoMem` and map it.
+                // DMA mappings are also made of untracked I/O pages, so they
+                // surface here as well; recover the `DmaCoherent` allocation
+                // instead if no `IoMem` matches.
+                if let Some((iomem, offset)) = src.find_iomem_by_paddr(paddr) {
+                    dst.jump(mapped_va).unwrap();
+                    dst.map_iomem(iomem, prop, PAGE_SIZE, offset);
+                } else if let Some((dma, offset)) = src.find_dma_by_paddr(paddr) {
+                    dst.jump(mapped_va).unwrap();
+                    dst.map_dma(dma, prop, PAGE_SIZE, offset);
+                } else {
+                    panic!("Found mapped I/O page but no IoMem or DmaCoherent matches it");
+                }
 
                 // Manually advance the source cursor.
                 // In the `MappedRam` case, the cursor is advanced by `protect_next`.

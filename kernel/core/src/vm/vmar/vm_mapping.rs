@@ -297,7 +297,7 @@ impl VmMapping {
         let mut cursor = vm_space.cursor_mut(&preempt_guard, &map_range).unwrap();
         let io_page_prop =
             PageProperty::new_user(PageFlags::from(self.perms), CachePolicy::Writeback);
-        cursor.map_dma(dma, io_page_prop, self.map_size.get(), vmo_offset);
+        cursor.map_dma(dma.clone(), io_page_prop, self.map_size.get(), vmo_offset);
     }
 
     /// Prints the mapping information in the format of `/proc/[pid]/maps`.
