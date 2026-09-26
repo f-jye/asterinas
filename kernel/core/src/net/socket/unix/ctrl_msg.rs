@@ -195,7 +195,7 @@ impl CredMessage {
 #[expect(non_camel_case_types)]
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, TryFromInt)]
-enum CControlType {
+pub(crate) enum CControlType {
     SCM_RIGHTS = 1,
     SCM_CREDENTIALS = 2,
     SCM_SECURITY = 3,
@@ -224,7 +224,11 @@ impl AuxiliaryData {
         let mut cred = None;
 
         for ctrl_msg in ctrl_msgs.into_iter() {
-            let ControlMessage::Unix(unix_ctrl_msg) = ctrl_msg;
+            // Kernel-synthesized credentials are receive-only; user space
+            // cannot send them.
+            let ControlMessage::Unix(unix_ctrl_msg) = ctrl_msg else {
+                continue;
+            };
             // TODO: What should we do if there are control messages of other protocols?
 
             match unix_ctrl_msg.0 {

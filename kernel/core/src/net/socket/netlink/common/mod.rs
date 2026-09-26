@@ -16,8 +16,9 @@ use crate::{
             macros::{sock_option_mut, sock_option_ref},
         },
         private::SocketPrivate,
+        unix::CUserCred,
         util::{
-            MessageHeader, RecvFlags, RecvOutput, SendFlags, SocketAddr,
+            ControlMessage, MessageHeader, RecvFlags, RecvOutput, SendFlags, SocketAddr,
             datagram_common::{Bound, Inner, select_remote_and_bind},
             options::{
                 GetSocketLevelOption, SetSocketLevelOption, SocketOptionSet, SocketTimeouts,
@@ -186,9 +187,15 @@ where
             self.try_recv(writer, flags)
         })?;
 
-        // TODO: Receive control message
+        // On sockets with SO_PASSCRED enabled, attach the sender credentials.
+        // Kernel-originated messages (e.g. uevents) carry pid 0.
+        let control_messages = if self.options.read().socket.pass_cred() {
+            vec![ControlMessage::KernelCred(CUserCred::new_kernel())]
+        } else {
+            Vec::new()
+        };
 
-        let message_header = MessageHeader::new(Some(addr), Vec::new());
+        let message_header = MessageHeader::new(Some(addr), control_messages);
 
         Ok((output, message_header))
     }
