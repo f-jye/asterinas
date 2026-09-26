@@ -10,11 +10,11 @@ use crate::{
             StaticEntryWithOps,
             pid::task::{
                 auxv::AuxvFileOps, cgroup::CgroupFileOps, cmdline::CmdlineFileOps,
-                comm::CommFileOps, environ::EnvironFileOps, exe::ExeSymOps, fd::FdDirOps,
-                gid_map::GidMapFileOps, maps::MapsFileOps, mem::MemFileOps,
+                comm::CommFileOps, cwd::CwdSymOps, environ::EnvironFileOps, exe::ExeSymOps,
+                fd::FdDirOps, gid_map::GidMapFileOps, maps::MapsFileOps, mem::MemFileOps,
                 mountinfo::MountInfoFileOps, mounts::MountsFileOps, mountstats::MountStatsFileOps,
-                ns::NsDirOps, oom_score_adj::OomScoreAdjFileOps, stat::StatFileOps,
-                status::StatusFileOps, uid_map::UidMapFileOps,
+                ns::NsDirOps, oom_score_adj::OomScoreAdjFileOps, rootdir::RootSymOps,
+                stat::StatFileOps, status::StatusFileOps, uid_map::UidMapFileOps,
             },
             template::{
                 ListedEntry, ProcDir, ProcDirOps, ReaddirEntry, keyed_readdir_entries,
@@ -33,6 +33,7 @@ mod auxv;
 mod cgroup;
 mod cmdline;
 mod comm;
+mod cwd;
 mod environ;
 mod exe;
 mod fd;
@@ -44,6 +45,7 @@ mod mounts;
 mod mountstats;
 mod ns;
 mod oom_score_adj;
+mod rootdir;
 pub(super) mod stat;
 mod status;
 mod uid_map;
@@ -109,6 +111,7 @@ impl TidDirOps {
         ("cgroup", InodeType::File, CgroupFileOps::new_inode),
         ("cmdline", InodeType::File, CmdlineFileOps::new_inode),
         ("comm", InodeType::File, CommFileOps::new_inode),
+        ("cwd", InodeType::SymLink, CwdSymOps::new_inode),
         ("environ", InodeType::File, EnvironFileOps::new_inode),
         ("exe", InodeType::SymLink, ExeSymOps::new_inode),
         ("fd", InodeType::Dir, FdDirOps::<fd::FileSymOps>::new_inode),
@@ -127,6 +130,7 @@ impl TidDirOps {
             InodeType::File,
             OomScoreAdjFileOps::new_inode,
         ),
+        ("root", InodeType::SymLink, RootSymOps::new_inode),
         ("stat", InodeType::File, StatFileOps::new_thread_inode),
         ("status", InodeType::File, StatusFileOps::new_inode),
         ("uid_map", InodeType::File, UidMapFileOps::new_inode),
