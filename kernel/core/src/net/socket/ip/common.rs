@@ -17,7 +17,16 @@ pub(super) fn resolve_bind_iface_and_config(
 ) -> Result<(Arc<Iface>, BindPortConfig)> {
     check_port_privilege(endpoint.port)?;
 
-    let iface = route::lookup_local_iface(endpoint.addr)?;
+    // Binding to the unspecified address (0.0.0.0 or ::) means listening on
+    // every local address, as in Linux. The port table stores the bound
+    // address as given, and smoltcp matches an unspecified listening address
+    // against any destination address. So the only decision left is the
+    // interface, which we take from the default route.
+    let iface = if endpoint.addr.is_unspecified() {
+        route::lookup_iface(endpoint.addr)?
+    } else {
+        route::lookup_local_iface(endpoint.addr)?
+    };
 
     let bind_port_config = BindPortConfig::new(*endpoint, can_reuse);
 
