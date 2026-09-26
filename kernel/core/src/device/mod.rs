@@ -4,8 +4,9 @@ mod evdev;
 mod fb;
 mod mem;
 pub(crate) mod misc;
+mod model;
 mod pty;
-pub mod registry;
+mod registry;
 pub(crate) mod tty;
 
 use device_id::DeviceId;
@@ -19,7 +20,7 @@ use crate::{
 };
 
 /// The abstraction of a device.
-pub trait Device: Send + Sync + 'static {
+pub(crate) trait Device: Send + Sync + 'static {
     /// Returns the device type.
     fn type_(&self) -> DeviceType;
 
@@ -45,19 +46,20 @@ impl Debug for dyn Device {
 }
 
 /// Device type
-#[derive(Debug)]
-pub enum DeviceType {
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum DeviceType {
     Char,
     Block,
 }
 
 pub(crate) fn init_in_first_kthread() {
+    // `devtmpfsd` has been spawned by `fs::init_in_first_kthread`, so the
+    // device model may now create device nodes.
+    model::install_hooks();
     registry::init_in_first_kthread();
     mem::init_in_first_kthread();
     misc::init_in_first_kthread();
     evdev::init_in_first_kthread();
-    // TODO: Transfer ownership of the boot framebuffer to DRM and skip registering the
-    // legacy framebuffer device once DRM has initialized successfully.
     fb::init_in_first_kthread();
 }
 
