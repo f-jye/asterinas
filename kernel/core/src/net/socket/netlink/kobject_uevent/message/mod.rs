@@ -5,14 +5,11 @@ use core::str::FromStr as _;
 use uevent::{SysObjAction, Uevent};
 
 use crate::{
-    net::socket::{
-        netlink::{
-            NetlinkSocketAddr,
-            addr::GroupIdSet,
-            receiver::QueueableMessage,
-            table::{MulticastMessage, NetlinkUeventProtocol, SupportedNetlinkProtocol},
-        },
-        unix::CUserCred,
+    net::socket::netlink::{
+        NetlinkSocketAddr,
+        addr::GroupIdSet,
+        receiver::QueueableMessage,
+        table::{MulticastMessage, NetlinkUeventProtocol, SupportedNetlinkProtocol},
     },
     prelude::*,
     util::MultiWrite,
