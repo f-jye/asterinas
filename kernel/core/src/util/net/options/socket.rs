@@ -13,8 +13,8 @@ use crate::{
         PeerCred, PeerGroups, Priority, RecvBuf, RecvBufForce, RecvTimeout, ReuseAddr, ReusePort,
         SendBuf, SendBufForce, SendTimeout, SocketOption, SocketType,
     },
-    prelude::*,
     process::Gid,
+    prelude::*,
 };
 
 /// Socket level options.
@@ -83,8 +83,8 @@ pub(crate) fn new_socket_option(name: i32) -> Result<Box<dyn RawSocketOption>> {
         CSocketOptionName::SNDBUFFORCE => Ok(Box::new(SendBufForce::new())),
         CSocketOptionName::RCVBUFFORCE => Ok(Box::new(RecvBufForce::new())),
         CSocketOptionName::PEERGROUPS => Ok(Box::new(PeerGroups::new())),
-        CSocketOptionName::ATTACH_FILTER => Ok(Box::new(AttachFilter::new())),
-        CSocketOptionName::DETACH_FILTER => Ok(Box::new(DetachFilter::new())),
+        CSocketOptionName::ATTACH_FILTER => Ok(Box::new(AttachFilter::default())),
+        CSocketOptionName::DETACH_FILTER => Ok(Box::new(DetachFilter::default())),
         _ => return_errno_with_message!(Errno::ENOPROTOOPT, "unsupported socket-level option"),
     }
 }
@@ -107,13 +107,79 @@ impl_raw_sock_option_get_only!(AcceptConn);
 impl_raw_socket_option!(SendBufForce);
 impl_raw_socket_option!(RecvBufForce);
 
-// SO_ATTACH_FILTER/SO_DETACH_FILTER install a classic-BPF filter on the
-// socket's receive path. The filter is accepted but not enforced: every
-// message that the kernel would deliver still reaches the socket. This is
-// enough for clients like libudev whose monitors only use the filter to
-// discard messages that are irrelevant anyway.
-impl_raw_sock_option_set_only!(AttachFilter);
-impl_raw_sock_option_set_only!(DetachFilter);
+/// SO_ATTACH_FILTER: accepts and stores the length of the attached cBPF
+/// program.
+///
+/// TODO: Executing the program is not implemented yet. libudev's uevent
+/// monitor only requires `setsockopt` to succeed before it accepts a bind,
+/// and unfiltered events are harmless for current users (they re-check the
+/// subsystem themselves).
+#[derive(Debug, Default)]
+pub(crate) struct AttachFilter {
+    prog_len: u16,
+}
+
+impl SocketOption for AttachFilter {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+impl RawSocketOption for AttachFilter {
+    fn read_from_user(&mut self, addr: Vaddr, _max_len: u32) -> Result<()> {
+        // The option buffer is a `struct sock_fprog`; its first field is the
+        // instruction count.
+        self.prog_len = current_userspace!().read_val(addr)?;
+        Ok(())
+    }
+
+    fn write_to_user(&self, _addr: Vaddr, _buffer_len: &mut u32) -> Result<usize> {
+        return_errno_with_message!(Errno::ENOPROTOOPT, "the option is setter-only");
+    }
+
+    fn as_sock_option_mut(&mut self) -> &mut dyn SocketOption {
+        self
+    }
+
+    fn as_sock_option(&self) -> &dyn SocketOption {
+        self
+    }
+}
+
+/// SO_DETACH_FILTER: accepts the detach request as a no-op; no filter is
+/// ever attached (see [`AttachFilter`]).
+#[derive(Debug, Default)]
+pub(crate) struct DetachFilter;
+
+impl SocketOption for DetachFilter {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+impl RawSocketOption for DetachFilter {
+    fn read_from_user(&mut self, _addr: Vaddr, _max_len: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn write_to_user(&self, _addr: Vaddr, _buffer_len: &mut u32) -> Result<usize> {
+        return_errno_with_message!(Errno::ENOPROTOOPT, "the option is setter-only");
+    }
+
+    fn as_sock_option_mut(&mut self) -> &mut dyn SocketOption {
+        self
+    }
+
+    fn as_sock_option(&self) -> &dyn SocketOption {
+        self
+    }
+}
 
 // SO_PEERGROUPS is a read-only option. However, calling setsockopt on SO_PEERGROUPS will return EINVAL
 // instead of ENOPROTOOPT like other options. Therefore, we manually implement `RawSocketOption` for it.
