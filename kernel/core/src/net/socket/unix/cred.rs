@@ -98,6 +98,16 @@ impl CUserCred {
         }
     }
 
+    /// Credentials representing the kernel itself (PID 0, root), as used by
+    /// netlink messages originated in kernel space.
+    pub(in crate::net) const fn new_kernel() -> Self {
+        Self {
+            pid: 0,
+            uid: Uid::new(0),
+            gid: Gid::new(0),
+        }
+    }
+
     pub(in crate::net) const fn new_overflow() -> Self {
         Self {
             pid: 0,

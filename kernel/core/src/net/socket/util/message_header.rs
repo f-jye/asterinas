@@ -3,7 +3,11 @@
 use align_ext::AlignExt;
 
 use super::{RecvFlags, SocketAddr};
-use crate::{net::socket::unix::UnixControlMessage, prelude::*, util::net::CSocketOptionLevel};
+use crate::{
+    net::socket::unix::{CUserCred, UnixControlMessage},
+    prelude::*,
+    util::net::CSocketOptionLevel,
+};
 
 /// Message header used for sendmsg/recvmsg.
 #[derive(Debug)]
@@ -39,6 +43,10 @@ impl MessageHeader {
 #[derive(Debug)]
 pub(crate) enum ControlMessage {
     Unix(UnixControlMessage),
+    /// A `SCM_CREDENTIALS` message synthesized by the kernel for sockets with
+    /// `SO_PASSCRED` enabled; used by netlink, where the credentials identify
+    /// the kernel itself (PID 0).
+    KernelCred(CUserCred),
 }
 
 impl ControlMessage {
@@ -132,6 +140,17 @@ impl ControlMessage {
     fn write_to(&self, writer: &mut VmWriter) -> Result<(CControlHeader, RecvFlags)> {
         match self {
             Self::Unix(msg) => msg.write_to(writer),
+            Self::KernelCred(cred) => {
+                const SCM_CREDENTIALS: i32 = 0x02;
+                let header = CControlHeader::new(
+                    CSocketOptionLevel::SOL_SOCKET,
+                    SCM_CREDENTIALS,
+                    size_of::<CUserCred>(),
+                );
+                writer.write_val(&header)?;
+                writer.write_val(cred)?;
+                Ok((header, RecvFlags::empty()))
+            }
         }
     }
 }
