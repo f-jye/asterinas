@@ -255,9 +255,9 @@ pub(in crate::fs) trait SysTreeInodeTy: Send + Sync + 'static {
     {
         match &self.node_kind() {
             SysTreeNodeKind::Branch(branch_node) => {
-                let attrs = branch_node.node_attrs();
+                let attrs = branch_node.node_attrs().to_vec();
                 let attr_iter = AttrDentryIter::new(
-                    Some((attrs.iter(), branch_node.as_ref())),
+                    Some((attrs.into_iter(), branch_node.as_ref())),
                     self.metadata().ino,
                     min_ino,
                 );
@@ -267,9 +267,9 @@ pub(in crate::fs) trait SysTreeInodeTy: Send + Sync + 'static {
                 attr_iter.chain(node_iter).chain(special_iter).collect()
             }
             SysTreeNodeKind::Leaf(leaf_node) => {
-                let attrs = leaf_node.node_attrs();
+                let attrs = leaf_node.node_attrs().to_vec();
                 let attr_iter = AttrDentryIter::new(
-                    Some((attrs.iter(), leaf_node.as_ref())),
+                    Some((attrs.into_iter(), leaf_node.as_ref())),
                     self.metadata().ino,
                     min_ino,
                 );
@@ -621,13 +621,13 @@ impl<KInode: SysTreeInodeTy + Send + Sync + 'static> Inode for KInode {
 }
 
 // Update AttrDentryIter to filter by min_ino
-struct AttrDentryIter<'a, I: Iterator<Item = &'a SysAttr>> {
+struct AttrDentryIter<'a, I: Iterator<Item = SysAttr>> {
     attrs_and_node: Option<(I, &'a dyn SysNode)>,
     dir_ino: Ino,
     min_ino: Ino,
 }
 
-impl<'a, I: Iterator<Item = &'a SysAttr>> AttrDentryIter<'a, I> {
+impl<'a, I: Iterator<Item = SysAttr>> AttrDentryIter<'a, I> {
     fn new(attrs_and_node: Option<(I, &'a dyn SysNode)>, dir_ino: Ino, min_ino: Ino) -> Self {
         Self {
             attrs_and_node,
@@ -637,7 +637,7 @@ impl<'a, I: Iterator<Item = &'a SysAttr>> AttrDentryIter<'a, I> {
     }
 }
 
-impl<'a, I: Iterator<Item = &'a SysAttr>> Iterator for AttrDentryIter<'a, I> {
+impl<'a, I: Iterator<Item = SysAttr>> Iterator for AttrDentryIter<'a, I> {
     type Item = Dentry;
 
     fn next(&mut self) -> Option<Dentry> {

@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use alloc::{collections::BTreeMap, sync::Arc};
+use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use core::fmt::Debug;
 
-use id_alloc::IdAlloc;
 use spin::Once;
 
 use super::{Error, Result, SysStr};
@@ -90,6 +89,11 @@ impl SysAttrSet {
         self.attrs.values()
     }
 
+    /// Returns the attributes in the set, in name order.
+    pub fn to_vec(&self) -> Vec<SysAttr> {
+        self.attrs.values().cloned().collect()
+    }
+
     /// Returns the number of attributes in the set.
     pub fn len(&self) -> usize {
         self.attrs.len()
@@ -106,22 +110,22 @@ impl SysAttrSet {
     }
 }
 
+/// The number of `u64` words needed to hold one bit per attribute ID.
+const ID_WORDS: usize = SysAttrSet::CAPACITY / u64::BITS as usize;
+
 /// Builds a [`SysAttrSet`].
 ///
 /// The builder owns the ID space: [`Self::add`] takes the lowest ID that the
 /// set being built is not already using, so a set derived from another with
 /// [`Self::from_set`] keeps every surviving attribute at the ID it had, and an
 /// ID freed by [`Self::remove`] can be taken by a later attribute.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SysAttrSetBuilder {
     attrs: BTreeMap<SysStr, SysAttr>,
-    /// The allocator for attribute IDs.
-    ids: IdAlloc,
-    /// The first error from [`Self::add`], returned by [`Self::build`].
-    ///
-    /// Storing the error keeps `add` chainable without silently building a
-    /// partial attribute set after an addition fails.
-    error: Option<Error>,
+    /// A bitmap of the IDs already taken.
+    ids: [u64; ID_WORDS],
+    /// How many attributes [`Self::add`] had to drop for want of an ID.
+    dropped: usize,
 }
 
 impl SysAttrSetBuilder {
@@ -144,11 +148,20 @@ impl SysAttrSetBuilder {
         builder
     }
 
+    /// Creates a builder holding the attributes of `set`, with their IDs.
+    pub fn from_set(set: &SysAttrSet) -> Self {
+        let mut builder = Self::new();
+        for attr in set.iter() {
+            builder.take_id(attr.id());
+            builder.attrs.insert(attr.name().clone(), attr.clone());
+        }
+        builder
+    }
+
     /// Adds an attribute definition to the builder.
     ///
     /// If an attribute with the same name already exists, this is a no-op, so
     /// the existing attribute keeps its ID and its permissions.
-    /// Invalid names and exhausted IDs are reported by [`Self::build`].
     pub fn add(&mut self, name: SysStr, perms: SysPerms) -> &mut Self {
         if self.error.is_some() {
             return self;
@@ -160,20 +173,20 @@ impl SysAttrSetBuilder {
         if self.attrs.contains_key(&name) {
             return self;
         }
-        let Some(id) = self.ids.alloc() else {
+        let Some(id) = self.allocate_id() else {
             // `add` stays chainable, so exhaustion is reported by `build`.
-            self.error = Some(Error::ResourceUnavailable);
+            self.dropped += 1;
             return self;
         };
         self.attrs
-            .insert(name.clone(), SysAttr::new(id as u8, name, perms));
+            .insert(name.clone(), SysAttr::new(id, name, perms));
         self
     }
 
     /// Removes an attribute by name, freeing its ID. Absent names are ignored.
     pub fn remove(&mut self, name: &str) -> &mut Self {
         if let Some(attr) = self.attrs.remove(name) {
-            self.ids.free(attr.id() as usize);
+            self.free_id(attr.id());
         }
         self
     }
@@ -182,15 +195,38 @@ impl SysAttrSetBuilder {
     ///
     /// # Errors
     ///
-    /// Returns the first error from [`Self::add`]: [`Error::InvalidName`] for
-    /// an invalid attribute name, or [`Error::ResourceUnavailable`] if all IDs
-    /// were in use. Removing an attribute does not clear a previous error.
-    /// A builder derived from a set that only removes attributes always succeeds.
+    /// Returns [`Error::ResourceUnavailable`] if [`Self::add`] ran out of IDs
+    /// and dropped an attribute. A later [`Self::remove`] does not undo that:
+    /// the caller asked for an attribute that is not in the set, and should
+    /// hear so. Nothing else can fail, so a builder that only removes
+    /// attributes always succeeds.
     pub fn build(self) -> Result<SysAttrSet> {
-        if let Some(error) = self.error {
-            return Err(error);
+        if self.dropped > 0 {
+            return Err(Error::ResourceUnavailable);
         }
         Ok(SysAttrSet { attrs: self.attrs })
+    }
+
+    fn allocate_id(&mut self) -> Option<u8> {
+        for (word_idx, word) in self.ids.iter_mut().enumerate() {
+            if *word == u64::MAX {
+                continue;
+            }
+            let bit = word.trailing_ones();
+            *word |= 1 << bit;
+            return Some((word_idx as u32 * u64::BITS + bit) as u8);
+        }
+        None
+    }
+
+    fn take_id(&mut self, id: u8) {
+        let id = id as u32;
+        self.ids[(id / u64::BITS) as usize] |= 1u64 << (id % u64::BITS);
+    }
+
+    fn free_id(&mut self, id: u8) {
+        let id = id as u32;
+        self.ids[(id / u64::BITS) as usize] &= !(1u64 << (id % u64::BITS));
     }
 }
 
