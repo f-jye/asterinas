@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use aster_device::AnyDevice;
 use aster_framebuffer::{
     framebuffer::{ColorMapEntry, FRAMEBUFFER, FrameBuffer, MAX_CMAP_SIZE},
     pixel::PixelFormat,
 };
 use device_id::{DeviceId, MajorId, MinorId};
 use ostd::mm::{HasPaddr, HasSize, VmIo};
+use spin::Once;
 
 use super::{Device, DeviceType, registry::char};
 use crate::{
@@ -223,25 +225,9 @@ mod ioctl_defs {
     pub(super) type Blank            = ioc!(FBIOBLANK,           0x4611, NoData);
 }
 
-impl Device for Fb {
-    fn type_(&self) -> DeviceType {
-        DeviceType::Char
-    }
-
-    fn id(&self) -> DeviceId {
-        // Same value with Linux: major 29, minor 0
-        DeviceId::new(MajorId::new(29), MinorId::new(0))
-    }
-
-    fn devtmpfs_meta(&self) -> Option<DevtmpfsNodeMeta> {
-        // Linux names framebuffer device nodes as `fbN`.
-        // TODO: We currently expose only one framebuffer device,
-        // so the devtmpfs node is fixed to `fb0`.
-        // Reference: <https://elixir.bootlin.com/linux/v6.18/source/drivers/video/fbdev/core/fbsysfs.c#L482>.
-        Some(DevtmpfsNodeMeta::new("fb0").unwrap())
-    }
-
-    fn open(&self) -> Result<Box<dyn PerOpenFileOps>> {
+impl Fb {
+    /// Opens the framebuffer and returns its file handle.
+    fn new_handle(&self) -> Result<Box<dyn PerOpenFileOps>> {
         let Some(framebuffer) = FRAMEBUFFER.get() else {
             return Err(Error::with_message(
                 Errno::ENODEV,
@@ -250,6 +236,56 @@ impl Device for Fb {
         };
         let framebuffer = framebuffer.clone();
         Ok(Box::new(FbHandle { framebuffer }))
+    }
+}
+
+/// The `graphics` class: framebuffer devices published through the device
+/// model, placed under `/sys/devices/virtual/graphics/` and exposed as
+/// `/sys/class/graphics/fb0`.
+struct GraphicsClass;
+
+impl aster_device::Class for GraphicsClass {
+    const NAME: &'static str = "graphics";
+    type Device = Fb;
+}
+
+/// A framebuffer device, as seen by the char registry.
+type FbDevice = aster_device::ClassDevice<GraphicsClass>;
+
+impl Device for FbDevice {
+    fn type_(&self) -> DeviceType {
+        DeviceType::Char
+    }
+
+    fn id(&self) -> DeviceId {
+        self.base()
+            .devnum()
+            .expect("the framebuffer device always has a device number")
+            .id()
+    }
+
+    fn devtmpfs_meta(&self) -> Option<DevtmpfsNodeMeta> {
+        // The device model creates the node when the device is added.
+        None
+    }
+
+    fn open(&self) -> Result<Box<dyn PerOpenFileOps>> {
+        (**self).new_handle()
+    }
+}
+
+/// The `platform` bus, hosting the firmware-provided framebuffer device that
+/// parents `/sys/class/graphics/fb0`, mirroring Linux's `simple-framebuffer`.
+struct PlatformBus;
+
+impl aster_device::Bus for PlatformBus {
+    const NAME: &'static str = "platform";
+    type Device = ();
+    type MatchData = ();
+
+    fn matches(&self, _: &(), _: &()) -> bool {
+        // No drivers bind on this bus; the framebuffer device is a leaf.
+        false
     }
 }
 
@@ -583,9 +619,44 @@ impl MappedObject for FbMapHandle {
 }
 
 pub(super) fn init_in_first_kthread() {
+    use aster_device::{BusDevice, BusHandle, ClassDevice, DevNum};
+
+    static PLATFORM_BUS: Once<Arc<BusHandle<PlatformBus>>> = Once::new();
+    static PLATFORM_DEVICE: Once<Arc<BusDevice<PlatformBus>>> = Once::new();
+    static FB_CLASS: Once<Arc<aster_device::ClassHandle<GraphicsClass>>> = Once::new();
+
     if FRAMEBUFFER.get().is_none() {
         return;
     }
 
-    char::register(Arc::new(Fb)).expect("failed to register framebuffer char device");
+    // The framebuffer hangs off a firmware-provided platform device, as
+    // Linux's `simple-framebuffer` does. The `device` link this parent gives
+    // the fb device (through which `subsystem` resolves to `platform`) is
+    // what user space (e.g. Xorg's fbdevhw) expects to find.
+    let bus = PLATFORM_BUS.call_once(|| {
+        aster_device::register_bus(PlatformBus)
+            .expect("the `platform` bus must not be registered twice")
+    });
+    let platform_device = PLATFORM_DEVICE.call_once(|| {
+        let device = BusDevice::builder(bus, "simple-framebuffer.0", ()).build();
+        aster_device::add(&device).expect("failed to add the simple-framebuffer platform device");
+        device
+    });
+
+    let class = FB_CLASS.call_once(|| {
+        aster_device::register_class(GraphicsClass)
+            .expect("the `graphics` class must not be registered twice")
+    });
+    // Same value with Linux: major 29, minor 0
+    let id = DeviceId::new(MajorId::new(29), MinorId::new(0));
+    let device = ClassDevice::builder(class, "fb0", Fb)
+        .devnum(DevNum::char(id))
+        .parent(platform_device.clone())
+        .build();
+
+    // The device model publishes sysfs topology (class dir, subsystem link,
+    // dev attribute, /sys/dev/char entry) and creates the /dev node itself,
+    // so the char registry only wires `open` to the device.
+    aster_device::add(&device).expect("failed to add the framebuffer device");
+    char::register(device).expect("failed to register framebuffer char device");
 }
