@@ -3,8 +3,6 @@
 //! The kernel side of the device model: the hooks that give the
 //! `aster-device` component access to devtmpfs and to uevent delivery.
 
-use alloc::format;
-
 use aster_device::{DevKind, DevNodeRequest, HookError, KernelHooks, Uevent};
 
 use crate::{
@@ -54,19 +52,15 @@ impl KernelHooks for Hooks {
     }
 
     fn broadcast_uevent(&self, event: &Uevent) {
-        // Deliver the event through the `NETLINK_KOBJECT_UEVENT` socket
-        // family, multicasting to group 1 where `udevd` listens.
-        let devpath = format!("/{}", event.devpath());
-        let envs: Vec<(String, String)> = event.vars().vars().to_vec();
-        let result = crate::net::socket::netlink::broadcast_device_uevent(
-            &event.action().to_string(),
-            &devpath,
+        // TODO: Deliver the event through the `NETLINK_KOBJECT_UEVENT` socket
+        // family; the multicast path exists but is not yet wired up.
+        debug!(
+            "uevent: {} {} (subsystem {}, seq {})",
+            event.action(),
+            event.devpath(),
             event.subsystem(),
-            envs,
+            event.seqnum()
         );
-        if let Err(error) = result {
-            warn!("failed to broadcast uevent for {}: {:?}", devpath, error);
-        }
     }
 }
 
