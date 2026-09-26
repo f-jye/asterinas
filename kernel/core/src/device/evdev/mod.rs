@@ -291,7 +291,9 @@ impl Device for EvdevClassDevice {
     }
 
     fn devtmpfs_meta(&self) -> Option<DevtmpfsNodeMeta> {
-        // The device model creates the node when the device is added.
+        // The device model creates the /dev/input/eventX node together with
+        // the sysfs topology (see `add_input_sysfs_node`); registering a
+        // second node here would duplicate it.
         None
     }
 
@@ -342,6 +344,10 @@ impl InputHandlerClass for EvdevHandlerClass {
             let _ = aster_device::remove(&device);
             return Err(ConnectError::InternalError);
         }
+
+        // Publish the device in the device model (sysfs topology) for
+        // udev/libinput based enumeration.
+        add_input_sysfs_node(&evdev);
 
         // Add to our registry for looking up during disconnection.
         EVDEV_DEVICES.lock().insert(minor_id, evdev.clone());
