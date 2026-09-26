@@ -6,7 +6,7 @@ mod mem;
 pub(crate) mod misc;
 mod model;
 mod pty;
-mod registry;
+pub mod registry;
 pub(crate) mod tty;
 
 use device_id::DeviceId;
@@ -20,7 +20,7 @@ use crate::{
 };
 
 /// The abstraction of a device.
-pub(crate) trait Device: Send + Sync + 'static {
+pub trait Device: Send + Sync + 'static {
     /// Returns the device type.
     fn type_(&self) -> DeviceType;
 
@@ -47,7 +47,7 @@ impl Debug for dyn Device {
 
 /// Device type
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum DeviceType {
+pub enum DeviceType {
     Char,
     Block,
 }
