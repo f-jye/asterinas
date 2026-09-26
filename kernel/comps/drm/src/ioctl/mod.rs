@@ -127,6 +127,10 @@ impl DrmFile {
                 self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
                 self.mode_get_property(cmd)
             }
+            cmd @ DrmIoctlModeCloseFb => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_close_fb(cmd)
+            }
             _ => {
                 ostd::warn!(
                     "unknown ioctl minor={:?} cmd={:#x}",
@@ -202,10 +206,10 @@ mod ioctl_defs {
     use super::{
         general::{DrmAuth, DrmGetCap, DrmSetClientCap, DrmUnique, DrmVersion},
         kms::abi::{
-            GemClose, ModeCardRes, ModeCreateDumb, ModeCrtc, ModeCrtcLut, ModeCrtcPageFlip,
-            ModeDestroyDumb, ModeFbCmd, ModeFbCmd2, ModeGetConnector, ModeGetEncoder,
-            ModeGetPlane, ModeGetPlaneRes, ModeGetProperty, ModeListLessees, ModeMapDumb,
-            ModeObjGetProps, ModePropEnum,
+            GemClose, ModeCardRes, ModeCloseFb, ModeCreateDumb, ModeCrtc, ModeCrtcLut,
+            ModeCrtcPageFlip, ModeDestroyDumb, ModeFbCmd, ModeFbCmd2, ModeGetConnector,
+            ModeGetEncoder, ModeGetPlane, ModeGetPlaneRes, ModeGetProperty, ModeListLessees,
+            ModeMapDumb, ModeObjGetProps, ModePropEnum,
         },
     };
 
@@ -261,4 +265,6 @@ mod ioctl_defs {
         ioc!(DRM_IOCTL_MODE_GETPLANE, b'd', 0xB6, InOutData<ModeGetPlane>);
     pub(super) type DrmIoctlModeGetProperty =
         ioc!(DRM_IOCTL_MODE_GETPROPERTY, b'd', 0xAA, InOutData<ModeGetProperty>);
+    pub(super) type DrmIoctlModeCloseFb =
+        ioc!(DRM_IOCTL_MODE_CLOSEFB, b'd', 0xD0, InOutData<ModeCloseFb>);
 }
