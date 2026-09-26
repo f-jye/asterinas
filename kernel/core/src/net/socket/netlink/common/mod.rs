@@ -183,9 +183,12 @@ where
         writer: &mut dyn MultiWrite,
         flags: RecvFlags,
     ) -> Result<(RecvOutput, MessageHeader)> {
-        let (output, addr) = self.block_on(IoEvents::IN, self.timeouts.recv_timeout(), || {
-            self.try_recv(writer, flags)
-        })?;
+        let (output, addr) = self.block_on_with_flags(
+            IoEvents::IN,
+            self.timeouts.recv_timeout(),
+            flags.contains(RecvFlags::MSG_DONTWAIT),
+            || self.try_recv(writer, flags),
+        )?;
 
         // On sockets with SO_PASSCRED enabled, attach the sender credentials.
         // Kernel-originated messages (e.g. uevents) carry pid 0.

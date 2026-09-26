@@ -236,10 +236,12 @@ impl Socket for DatagramSocket {
             warn!("unsupported flags: {:?}", flags);
         }
 
-        let (output, peer_addr) =
-            self.block_on(IoEvents::IN, self.timeouts.recv_timeout(), || {
-                self.try_recv(writer, flags)
-            })?;
+        let (output, peer_addr) = self.block_on_with_flags(
+            IoEvents::IN,
+            self.timeouts.recv_timeout(),
+            flags.contains(RecvFlags::MSG_DONTWAIT),
+            || self.try_recv(writer, flags),
+        )?;
 
         // TODO: Receive control message
 

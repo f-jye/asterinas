@@ -4,7 +4,7 @@ use ostd::mm::VmIo;
 
 use super::SyscallReturn;
 use crate::{
-    fs::file::file_table::{RawFileDesc, get_file_fast},
+    fs::file::file_table::{FdFlags, RawFileDesc, get_file_fast},
     net::socket::util::RecvFlags,
     prelude::*,
     util::net::CUserMsgHdr,
@@ -48,8 +48,15 @@ pub(super) fn sys_recvmsg(
     c_user_msghdr.msg_namelen = c_user_msghdr.write_socket_addr_to_user(addr)?;
 
     let control_messages = message_header.control_messages();
+    // The received file descriptors are marked as close-on-exec if the user asks
+    // for it via `MSG_CMSG_CLOEXEC`.
+    let fd_flags = if flags.contains(RecvFlags::MSG_CMSG_CLOEXEC) {
+        FdFlags::CLOEXEC
+    } else {
+        FdFlags::empty()
+    };
     let (control_len, control_flags) =
-        c_user_msghdr.write_control_messages_to_user(control_messages, &user_space)?;
+        c_user_msghdr.write_control_messages_to_user(control_messages, &user_space, fd_flags)?;
     c_user_msghdr.msg_controllen = control_len as _;
     c_user_msghdr.msg_flags = (output.flags() | control_flags).bits().cast_unsigned();
 
