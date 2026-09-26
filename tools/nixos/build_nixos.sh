@@ -8,6 +8,17 @@ TARGET_ARCH=${TARGET_ARCH:-x86_64}
 # Accept config file name as parameter, default to "configuration.nix"
 CONFIG_FILE_NAME=${1:-"configuration.nix"}
 
+# Defaults matching the Makefile, so the script also works standalone.
+NIXOS_DISK_SIZE_IN_MB=${NIXOS_DISK_SIZE_IN_MB:-16384}
+NIXOS_DISABLE_SYSTEMD=${NIXOS_DISABLE_SYSTEMD:-false}
+NIXOS_STAGE_2_INIT=${NIXOS_STAGE_2_INIT:-"/bin/sh -l"}
+RELEASE_SUBSTITUTER=${RELEASE_SUBSTITUTER:-https://aster-nixos-release.cachix.org}
+DEV_SUBSTITUTER=${DEV_SUBSTITUTER:-https://aster-nixos-dev.cachix.org}
+RELEASE_TRUSTED_PUBLIC_KEY=${RELEASE_TRUSTED_PUBLIC_KEY:-aster-nixos-release.cachix.org-1:xB6U/f5ck5vGDJZ04kPp3zGpZ4Nro9X4+TSSMAETVFE=}
+DEV_TRUSTED_PUBLIC_KEY=${DEV_TRUSTED_PUBLIC_KEY:-aster-nixos-dev.cachix.org-1:xrCbE2flfliFTQCY/2HeJoT2tCO+5kMTZeLIUH9lnIA=}
+LOG_LEVEL=${LOG_LEVEL:-error}
+CONSOLE=${CONSOLE:-hvc0}
+
 SCRIPT_DIR=$(cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd)
 ASTERINAS_DIR=$(realpath ${SCRIPT_DIR}/../..)
 ASTER_IMAGE_PATH=${ASTERINAS_DIR}/target/nixos/asterinas.img

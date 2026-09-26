@@ -8,6 +8,17 @@
 {
   systemd.package = pkgs.aster_systemd;
 
+  # FIXME: systemd-udevd fails at `Failed at step NAMESPACE spawning` because
+  # the mount namespace setup that `PrivateMounts=yes` performs is not fully
+  # supported by the kernel yet. Relax the sandbox until the kernel fix lands.
+  # See HACKS.md (S10) for details.
+  systemd.services.systemd-udevd = {
+    serviceConfig = {
+      PrivateMounts = lib.mkForce false;
+      ProtectHostname = lib.mkForce false;
+    };
+  };
+
   # TODO: The following services currently do not work and
   # may affect systemd startup or cause performance issues.
   # Enable them after they can run successfully.
@@ -18,7 +29,9 @@
   systemd.services.resolvconf.enable = false;
   systemd.services.systemd-random-seed.enable = false;
   services.timesyncd.enable = false;
-  services.udev.enable = false;
+  # Real udev works on the kernel (uevent broadcast, SO_ATTACH_FILTER and the
+  # graphics/input sysfs topology are all verified on real desktop images).
+  services.udev.enable = true;
 
   services.getty.autologinUser = "root";
   services.getty.loginProgram = "${pkgs.util-linux.bin}/bin/login";

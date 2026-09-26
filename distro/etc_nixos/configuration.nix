@@ -23,16 +23,124 @@
     nameserver 8.8.8.8
   '';
 
-  # Uncomment the two options below to enable the X11 (X.Org) desktop (XFCE).
-  # services.xserver.enable = true;
-  # services.xserver.desktopManager.xfce.enable = true;
+  # The desktop environment: GNOME on Wayland (mutter/gnome-shell).
+  services.xserver.enable = true;
+  services.xserver.desktopManager.gnome-flashback.enable = true;
+  # gnome-panel resolves its application menu from /etc/xdg/menus.
+  environment.etc."xdg/menus".source = "${pkgs.gnome-menus}/etc/xdg/menus";
+  # gnome-shell's ActUserManager tracks the session user through
+  # accountsservice; without it the startup state machine stalls before
+  # the first frame is painted.
+  services.accounts-daemon.enable = true;
+  services.dbus.enable = true;
+  # The broker launcher sets up mount namespaces, which the kernel's mount
+  # propagation support does not cover yet; the classic daemon starts fine.
+  services.dbus.implementation = "dbus";
+  # NixOS leaves the dbus units merely linked; pull them into the boot.
+  systemd.sockets.dbus.wantedBy = [ "sysinit.target" ];
+  systemd.services.dbus.wantedBy = [ "sysinit.target" ];
+  # dbus-daemon's READY notification is not seen by pid1 here, so the
+  # notify start job always timed out and killed the bus. Run it as a
+  # plain simple service instead.
+  systemd.services.dbus.serviceConfig.Type = lib.mkForce "simple";
+  hardware.graphics.enable = true;
+
+  # SSH access for kernel bring-up and desktop automation. The password below
+  # is only acceptable for a throwaway virtual machine.
+  services.openssh.enable = true;
+  services.openssh.settings.PermitRootLogin = "yes";
+  users.users.root.initialPassword = "root";
+  # eth0 gets its address via DHCP; let sshd's Restart=always retry until
+  # the route is up instead of hitting the start limit.
+  systemd.services.sshd = {
+    unitConfig.StartLimitIntervalSec = 0;
+    wants = [ "network-online.target" ];
+    after = [ "network-online.target" ];
+  };
+
+  # systemd-minimal does not ship the seat-tagging rules; Xorg's udev
+  # backend filters input devices by the "seat" tag, so tag them here.
+  # (The DEVTYPE for DRM cards comes from the kernel uevent itself, as in
+  # upstream Linux; newer systemd forbids assigning it from rules.)
+  services.udev.extraRules = ''
+    SUBSYSTEM=="input", TAG+="seat"
+    SUBSYSTEM=="drm", TAG+="seat"
+  '';
+
+  # systemd-minimal (the overlaid systemd) ships no hwdb.d; provide the
+  # hwdb files from the full systemd package without its rules (those
+  # reference helpers the minimal udev does not install).
+  services.udev.packages = [
+    (pkgs.runCommand "systemd-hwdb-d" { } ''
+      mkdir -p $out/lib/udev/hwdb.d
+      cp ${pkgs.systemd}/lib/udev/hwdb.d/* $out/lib/udev/hwdb.d/
+    '')
+  ];
+
+  # A real user manager for root: gnome-session 50 starts the session
+  # through the systemd user instance (the packaged user@.service is a
+  # placeholder that does nothing).
+  systemd.services."systemd-user-for-root" = {
+    description = "User Manager for root";
+    wantedBy = [ "multi-user.target" ];
+    before = [ "graphical.target" ];
+    environment = {
+      DBUS_SESSION_BUS_ADDRESS = "unix:path=/run/user/0/bus";
+      XDG_RUNTIME_DIR = "/run/user/0";
+    };
+    preStart = ''
+      mkdir -p /run/user/0
+      chmod 700 /run/user/0
+      ${pkgs.dbus}/bin/dbus-daemon --session --fork \
+        --address=unix:path=/run/user/0/bus
+    '';
+    serviceConfig = {
+      Type = "notify";
+      User = "root";
+      ExecStart = "/nix/store/bzd4xvfvq816d7drn706fagayg7zbwyy-systemd-minimal-260.2/lib/systemd/systemd --user";
+      Restart = "on-failure";
+    };
+  };
+
+  # S11 (KERNEL-FIX-PENDING): udevadm trigger's varlink request does not
+  # reach udevd on Asterinas yet, so the boot-time coldplug is a no-op.
+  # Replay input and DRM uevents through the kernel netlink path instead;
+  # remove once the trigger delivery is fixed (see HACKS.md).
+  systemd.services.aster-input-coldplug = {
+    description = "Replay input and DRM device uevents for coldplug";
+    wantedBy = [ "multi-user.target" ];
+    before = [ "gnome-wayland.service" ];
+    after = [ "systemd-udevd.service" "systemd-udev-trigger.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = pkgs.writeShellScript "aster-input-coldplug" ''
+        for d in /sys/class/input/event* /sys/class/drm/card*; do
+          echo add > "$d/uevent" 2>/dev/null || true
+        done
+      '';
+    };
+  };
+
+  # S12 (KERNEL-FIX-PENDING): Asterinas has no background writeback yet, so
+  # anything not explicitly synced is lost when the VM is powered off. Sync
+  # once after the stage-2 activation has populated /etc so the next boot
+  # starts from a consistent state (see HACKS.md).
+  systemd.services.aster-boot-sync = {
+    description = "Sync boot-time writes to disk";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = "${pkgs.coreutils}/bin/sync";
+    };
+  };
 
   # Uncomment the following line to enable Podman.
   # virtualisation.podman.enable = true;
 
   # List packages installed in system profile.
   # You can use https://search.nixos.org/ to find more packages (and options).
-  environment.systemPackages = with pkgs; [ hello-asterinas ];
+  environment.systemPackages = with pkgs; [ hello-asterinas gnome-menus ];
 
   system.nixos.distroName = "Asterinas NixOS";
 

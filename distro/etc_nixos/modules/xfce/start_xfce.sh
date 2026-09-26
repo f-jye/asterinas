@@ -23,8 +23,6 @@ nohup Xorg :0 vt1 \
   -logfile /var/log/xorg_debug.log \
   -novtswitch \
   -keeptty \
-  -keyboard keyboard \
-  -pointer mouse0 \
   > /var/log/xorg.log 2>&1 &
 
 

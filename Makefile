@@ -30,11 +30,7 @@ CMDLINE ?=
 # Asterinas will automatically fall back to tty0 if hvc0 is not available.
 # Note that currently the virtual terminal (tty0) can only work with
 # linux-efi-handover64 and linux-efi-pe64 boot protocol.
-ifeq ($(SCHEME), sifive_u)
-CONSOLE ?= ttyS0
-else
 CONSOLE ?= hvc0
-endif
 # End of global build options.
 
 # GDB debugging and profiling options.
@@ -77,7 +73,8 @@ CONFORMANCE_TEST_GVISOR_FILTER ?= ""
 XFSTESTS_FS_TYPE ?= ext2
 XFSTESTS_RUNLIST ?= short.list
 XFSTESTS_DISK_SIZE ?= 12G
-
+XFSTESTS_TEST_DEV ?= /dev/vdd
+XFSTESTS_SCRATCH_DEV ?= /dev/vde
 # Specify whether to build regression tests under `test/initramfs/src/regression`.
 ENABLE_REGRESSION_TEST ?= false
 # End of auto test features.
@@ -89,14 +86,6 @@ VHOST ?= off
 # The name server listed by /etc/resolv.conf inside the Asterinas VM
 DNS_SERVER ?= none
 # End of network settings
-
-# Virtio-fs settings. Set VIRTIOFS=on to attach a virtio-fs device. Set
-# VIRTIOFS_SCRATCH=on to attach a second device (requires VIRTIOFS=on).
-# VIRTIOFS_CACHE accepts auto, always, never, or metadata.
-VIRTIOFS ?= off
-VIRTIOFS_SCRATCH ?= off
-VIRTIOFS_CACHE ?= auto
-# End of Virtio-fs settings.
 
 # NixOS settings
 NIXOS_DISK_SIZE_IN_MB ?= 16384
@@ -147,7 +136,6 @@ CARGO_OSDK_BUILD_ARGS += --kcmd-args="CONFORMANCE_TEST_EXTRA_BLOCKLISTS=$(CONFOR
 CARGO_OSDK_BUILD_ARGS += --kcmd-args="CONFORMANCE_TEST_SELECTOR=$(CONFORMANCE_TEST_SELECTOR)"
 CARGO_OSDK_BUILD_ARGS += --kcmd-args="CONFORMANCE_TEST_GVISOR_FILTER=$(CONFORMANCE_TEST_GVISOR_FILTER)"
 ifeq ($(CONFORMANCE_TEST_SUITE), xfstests)
-include test/initramfs/src/conformance/xfstests/build_config.mk
 CARGO_OSDK_BUILD_ARGS += --kcmd-args="XFSTESTS_FS_TYPE=$(XFSTESTS_FS_TYPE)"
 CARGO_OSDK_BUILD_ARGS += --kcmd-args="XFSTESTS_RUNLIST=$(XFSTESTS_RUNLIST)"
 CARGO_OSDK_BUILD_ARGS += --kcmd-args="XFSTESTS_TEST_DEV=$(XFSTESTS_TEST_DEV)"
@@ -165,6 +153,8 @@ ENABLE_REGRESSION_TEST := true
 export VSOCK=on
 CARGO_OSDK_BUILD_ARGS += --init-args="/test/run_vsock_test.sh"
 endif
+
+include test/initramfs/src/conformance/xfstests/build_config.mk
 
 ifeq ($(RELEASE_LTO), 1)
 CARGO_OSDK_COMMON_ARGS += --profile release-lto
@@ -232,9 +222,8 @@ endif
 
 # To test the linux-efi-handover64 boot protocol, we need to use Debian's
 # GRUB release, which is installed in /usr/bin in our Docker image.
-GRUB_MKRESCUE ?= /usr/bin/grub-mkrescue
 ifeq ($(BOOT_PROTOCOL), linux-efi-handover64)
-CARGO_OSDK_COMMON_ARGS += --grub-mkrescue="$(GRUB_MKRESCUE)" --grub-boot-protocol="linux"
+CARGO_OSDK_COMMON_ARGS += --grub-mkrescue=/usr/bin/grub-mkrescue --grub-boot-protocol="linux"
 else ifeq ($(BOOT_PROTOCOL), linux-efi-pe64)
 CARGO_OSDK_COMMON_ARGS += --grub-boot-protocol="linux"
 else ifeq ($(BOOT_PROTOCOL), linux-legacy32)
@@ -260,15 +249,6 @@ endif
 
 ifeq ($(INITRAMFS),on)
 CARGO_OSDK_COMMON_ARGS += $(CARGO_OSDK_INITRAMFS_OPTION)
-endif
-CARGO_OSDK_VIRTIOFSD := ./tools/run_virtiofsd.sh --cache-mode $(VIRTIOFS_CACHE) --work-dir
-ifeq ($(VIRTIOFS),on)
-# Each Make invocation gets an isolated virtio-fs work directory under /tmp.
-VIRTIOFS_WORK_DIR := $(shell mktemp -d -p /tmp asterinas-virtiofs-XXXXXX)
-CARGO_OSDK_COMMON_ARGS += --qemu-with-daemon="$(CARGO_OSDK_VIRTIOFSD) $(VIRTIOFS_WORK_DIR)"
-endif
-ifeq ($(VIRTIOFS_SCRATCH),on)
-CARGO_OSDK_COMMON_ARGS += --qemu-with-daemon="$(CARGO_OSDK_VIRTIOFSD) $(VIRTIOFS_WORK_DIR)/scratch"
 endif
 
 CARGO_OSDK_BUILD_ARGS += $(CARGO_OSDK_COMMON_ARGS)
@@ -484,7 +464,7 @@ format:
 	@
 	@# Format the code using various tools
 	@./tools/format_all.sh
-	@./tools/nixfmt.sh flake.nix distro tools/dev_env/nix
+	@nixfmt ./distro
 	@$(MAKE) --no-print-directory -C test/initramfs format
 	@$(MAKE) --no-print-directory -C test/nixos format
 
@@ -494,7 +474,7 @@ check: private WORKSPACE_MEMBER_DIRS = \
 check: $(CARGO_OSDK)
 	@# Check if any git-tracked, non-patch files contain trailing whitespace
 	@# NOTE: `--git-dir` will suppress "detected dubious ownership in repository" errors
-	@if git --git-dir=$$PWD/.git grep -n ' $$' -- ':!*.patch' ; then \
+	@if git --git-dir=$$PWD/.git ls-files | grep -v '[.]patch$$' | xargs grep -d skip ' $$' ; then \
 		echo "Error: Files (as listed above) contain trailing whitespaces"; \
 		exit 1; \
 	fi
@@ -513,8 +493,8 @@ check: $(CARGO_OSDK)
 	@# Check compilation of the Rust code
 	@./tools/clippy_check.sh workspace
 	@
-	@# Check Nix formatting
-	@./tools/nixfmt.sh --check flake.nix distro tools/dev_env/nix
+	@# Check formatting issues of Nix files under distro directory
+	@nixfmt --check ./distro
 	@
 	@# Check formatting issues of the C code and Nix files (regression tests)
 	@$(MAKE) --no-print-directory -C test/initramfs check
