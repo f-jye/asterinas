@@ -63,6 +63,50 @@ pub(crate) fn init_in_first_kthread() {
     fb::init_in_first_kthread();
 }
 
+/// The virtual `platform` bus hosting devices that Linux would attach to a
+/// platform device (framebuffers, i8042 input devices, and so on). Devices on
+/// this bus get the `device/subsystem` sysfs chain that user space expects.
+pub(super) mod platform {
+    use alloc::sync::Arc;
+    use aster_device::{Bus, BusDevice, BusHandle};
+    use spin::Once;
+
+    /// The `platform` bus.
+    pub(super) struct PlatformBus;
+
+    impl Bus for PlatformBus {
+        const NAME: &'static str = "platform";
+        type Device = ();
+        type MatchData = ();
+
+        fn matches(&self, _: &(), _: &()) -> bool {
+            false
+        }
+    }
+
+    /// Returns the registered platform bus, registering it on first use.
+    pub(super) fn bus() -> &'static Arc<BusHandle<PlatformBus>> {
+        static BUS: Once<Arc<BusHandle<PlatformBus>>> = Once::new();
+        BUS.call_once(|| {
+            aster_device::register_bus(PlatformBus)
+                .expect("failed to register the platform bus")
+        })
+    }
+
+    /// Returns the shared parent device for virtual peripherals, creating it
+    /// on first use.
+    pub(super) fn parent() -> Arc<BusDevice<PlatformBus>> {
+        static PARENT: Once<Arc<BusDevice<PlatformBus>>> = Once::new();
+        PARENT
+            .call_once(|| {
+                let parent = BusDevice::builder(bus(), "virtual-peripherals", ()).build();
+                aster_device::add(&parent).expect("failed to add the platform parent device");
+                parent
+            })
+            .clone()
+    }
+}
+
 /// Initializes device state after mounting rootfs.
 pub(crate) fn init_in_first_process() -> Result<()> {
     tty::init_in_first_process()?;
