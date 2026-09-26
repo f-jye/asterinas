@@ -118,15 +118,19 @@ impl Inode for SysFsInode {
     }
 
     fn revalidate_exists(&self, name: &str, child: &dyn Inode) -> bool {
-        let child = child.downcast_ref::<Self>().unwrap();
+        let Some(child) = child.downcast_ref::<Self>() else {
+            return false;
+        };
 
         let child_node_id = match child.node_kind() {
             // An attribute is still valid if its node still lists it with the
-            // same id, and the node still exposes it.
+            // same id; an attribute removed and re-added is a new file.
             SysTreeNodeKind::Attr(attr, node) => {
-                return node.node_attrs().get(attr.name()).is_some_and(|current| {
-                    current.id() == attr.id() && current.perms() == attr.perms()
-                }) && !node.is_attr_absent(name);
+                return node
+                    .node_attrs()
+                    .get(attr.name())
+                    .is_some_and(|current| current.id() == attr.id())
+                    && !node.is_attr_absent(name);
             }
             SysTreeNodeKind::Branch(node) => *node.id(),
             SysTreeNodeKind::Leaf(node) => *node.id(),
