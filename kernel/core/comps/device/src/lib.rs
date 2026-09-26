@@ -65,8 +65,9 @@ pub use self::{
     bus::{Bus, BusHandle, Driver, DriverHandle, register_bus},
     class::{Class, ClassHandle, ClassInterface, register_class},
     device::{
-        AnyDevice, BareDevice, BusDevice, BusDeviceBuilder, ClassDevice, ClassDeviceBuilder,
-        DevNode, DeviceBase, DeviceBuilder, DeviceType, Subsystem, SubsystemKind, add, remove,
+        AnyDevice, AttrGroupDevice, BareDevice, BusDevice, BusDeviceBuilder, ClassDevice,
+        ClassDeviceBuilder, DevNode, DeviceBase, DeviceBuilder, DeviceType, Subsystem,
+        SubsystemKind, add, remove,
     },
     devnum::{DEFAULT_DEVNODE_MODE, DevKind, DevNodeRequest, DevNum},
     error::{Error, Result},

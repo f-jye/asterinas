@@ -21,6 +21,7 @@
 //! The submodules hold one concept each: `registration` the `add` and
 //! `remove` sequences and the builder, and one module per device struct.
 
+mod attr_group_device;
 mod bare_device;
 mod bus_device;
 mod class_device;
@@ -38,6 +39,7 @@ use ostd::sync::{Mutex, RwMutex};
 use spin::Once;
 
 pub use self::{
+    attr_group_device::AttrGroupDevice,
     bare_device::BareDevice,
     bus_device::{BusDevice, BusDeviceBuilder},
     class_device::{ClassDevice, ClassDeviceBuilder},
@@ -506,8 +508,16 @@ pub trait AnyDevice: crate::Container + DeviceInternals {
 /// `SysBranchNode::remove_child` keeps its refusing default: the tree under a
 /// device is edited only by the registration sequence, through `SysTreeEdit`.
 macro_rules! impl_device_node {
-    ($ty:ident $(< $p:ident : $bound:path >)?) => {
-        impl$(<$p: $bound>)? ::aster_systree::SysObj for $ty$(<$p>)? {
+    // A non-generic device struct.
+    ($ty:ident) => {
+        impl_device_node!(@impl $ty,);
+    };
+    // A generic device struct, e.g. `impl_device_node!(Foo, (T: Trait), (T));`
+    ($ty:ident, ($($generics:tt)*), ($arg:ident)) => {
+        impl_device_node!(@impl $ty<$arg>, $($generics)*);
+    };
+    (@impl $ty:ty, $($generics:tt)*) => {
+        impl<$($generics)*> ::aster_systree::SysObj for $ty {
             fn as_any(&self) -> &dyn core::any::Any {
                 self
             }
@@ -541,7 +551,7 @@ macro_rules! impl_device_node {
             }
         }
 
-        impl$(<$p: $bound>)? ::aster_systree::SysNode for $ty$(<$p>)? {
+        impl<$($generics)*> ::aster_systree::SysNode for $ty {
             fn node_attrs(&self) -> ::alloc::sync::Arc<::aster_systree::SysAttrSet> {
                 self.base().attrs.set()
             }
@@ -587,7 +597,7 @@ macro_rules! impl_device_node {
             }
         }
 
-        impl$(<$p: $bound>)? ::aster_systree::SysBranchNode for $ty$(<$p>)? {
+        impl<$($generics)*> ::aster_systree::SysBranchNode for $ty {
             fn visit_child_with(&self, name: &str, f: &mut dyn FnMut(Option<&::alloc::sync::Arc<dyn ::aster_systree::SysObj>>)) {
                 let children = self.base().children.read();
                 f(children.get(name))
@@ -614,9 +624,9 @@ macro_rules! impl_device_node {
             }
         }
 
-        impl$(<$p: $bound>)? $crate::node::Sealed for $ty$(<$p>)? {}
+        impl<$($generics)*> $crate::node::Sealed for $ty {}
 
-        impl$(<$p: $bound>)? $crate::Container for $ty$(<$p>)? {}
+        impl<$($generics)*> $crate::Container for $ty {}
     };
 }
 
