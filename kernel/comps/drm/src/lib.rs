@@ -62,7 +62,7 @@ pub fn register_device(device: Arc<dyn DrmDevice>) -> Result<()> {
 
     let primary_minor = DrmMinor::new(registered_device, DrmMinorType::Primary);
 
-    let card = ClassDevice::builder(&drm_class(), "card0", primary_minor.clone())
+    let card = ClassDevice::builder(drm_class(), "card0", primary_minor.clone())
         .devnum(DevNum::char(DeviceId::new(
             MajorId::new(DRM_MAJOR_ID),
             MinorId::new(DRM_PRIMARY_MINOR_BASE),
@@ -85,16 +85,16 @@ pub fn register_device(device: Arc<dyn DrmDevice>) -> Result<()> {
     Ok(())
 }
 
-fn drm_class() -> Arc<ClassHandle<DrmClass>> {
-    static DRM_CLASS: Mutex<Option<Arc<ClassHandle<DrmClass>>>> = Mutex::new(None);
-    DRM_CLASS
-        .lock()
-        .get_or_insert_with(|| {
-            aster_device::register_class(DrmClass)
-                .expect("the `drm` class must not be registered twice")
-        })
-        .clone()
+fn drm_class() -> &'static Arc<ClassHandle<DrmClass>> {
+    static DRM_CLASS: Mutex<Option<&'static Arc<ClassHandle<DrmClass>>>> = Mutex::new(None);
+    let mut guard = DRM_CLASS.lock();
+    if guard.is_none() {
+        let handle = Box::leak(Box::new(aster_device::register_class(DrmClass).unwrap()));
+        *guard = Some(handle);
+    }
+    guard.as_ref().unwrap()
 }
+
 const DRM_MAJOR_ID: u16 = 226;
 const DRM_PRIMARY_MINOR_BASE: u32 = 0;
 

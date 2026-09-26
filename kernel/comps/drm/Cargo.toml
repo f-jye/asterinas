@@ -5,7 +5,6 @@ edition.workspace = true
 
 [dependencies]
 aster-core.workspace = true
-aster-util.workspace = true
 aster-device.workspace = true
 aster-framebuffer.workspace = true
 atomic-integer-wrapper.workspace = true
