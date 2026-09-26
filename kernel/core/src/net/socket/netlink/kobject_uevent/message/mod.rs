@@ -5,11 +5,14 @@ use core::str::FromStr as _;
 use uevent::{SysObjAction, Uevent};
 
 use crate::{
-    net::socket::netlink::{
-        NetlinkSocketAddr,
-        addr::GroupIdSet,
-        receiver::QueueableMessage,
-        table::{MulticastMessage, NetlinkUeventProtocol, SupportedNetlinkProtocol},
+    net::socket::{
+        netlink::{
+            NetlinkSocketAddr,
+            addr::GroupIdSet,
+            receiver::QueueableMessage,
+            table::{MulticastMessage, NetlinkUeventProtocol, SupportedNetlinkProtocol},
+        },
+        unix::CUserCred,
     },
     prelude::*,
     util::MultiWrite,
@@ -44,16 +47,30 @@ pub fn broadcast_device_uevent(
 /// It does not have a netlink header.
 #[derive(Clone, Debug)]
 pub(crate) struct UeventMessage {
-    uevent: String,
+    payload: Vec<u8>,
     src_addr: NetlinkSocketAddr,
+    /// The credentials the receiver should attribute to this message. Kernel
+    /// broadcasts use the kernel identity (PID 0); messages relayed between
+    /// user-space sockets carry the sender's real credentials, as Linux does.
+    cred: CUserCred,
 }
 
 impl UeventMessage {
-    /// Creates a new uevent message.
+    /// Creates a new uevent message originated from the kernel.
     fn new(uevent: Uevent, src_addr: NetlinkSocketAddr) -> Self {
         Self {
-            uevent: uevent.to_string(),
+            payload: uevent.to_string().into_bytes(),
             src_addr,
+            cred: CUserCred::new_kernel(),
+        }
+    }
+
+    /// Creates a message from the raw bytes sent by a user-space socket.
+    pub(super) fn from_bytes(bytes: Vec<u8>, src_addr: NetlinkSocketAddr, cred: CUserCred) -> Self {
+        Self {
+            payload: bytes,
+            src_addr,
+            cred,
         }
     }
 
@@ -62,9 +79,14 @@ impl UeventMessage {
         &self.src_addr
     }
 
+    /// Returns the credentials attributed to this message.
+    pub(super) fn cred(&self) -> &CUserCred {
+        &self.cred
+    }
+
     /// Writes the uevent to the given `writer`.
     pub(super) fn write_to(&self, writer: &mut dyn MultiWrite) -> Result<()> {
-        let _nbytes = writer.write(&mut VmReader::from(self.uevent.as_bytes()))?;
+        let _nbytes = writer.write(&mut VmReader::from(self.payload.as_slice()))?;
         // `_nbytes` may be smaller than the message size. We ignore it to truncate the message.
 
         Ok(())
@@ -73,7 +95,7 @@ impl UeventMessage {
 
 impl QueueableMessage for UeventMessage {
     fn total_len(&self) -> usize {
-        self.uevent.len()
+        self.payload.len()
     }
 }
 

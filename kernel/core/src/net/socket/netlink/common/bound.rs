@@ -4,8 +4,9 @@
 
 use crate::{
     events::IoEvents,
-    net::socket::netlink::{
-        GroupIdSet, NetlinkSocketAddr, receiver::MessageQueue, table::BoundHandle,
+    net::socket::{
+        netlink::{GroupIdSet, NetlinkSocketAddr, receiver::MessageQueue, table::BoundHandle},
+        unix::CUserCred,
     },
     prelude::*,
 };
@@ -14,6 +15,10 @@ pub(crate) struct BoundNetlink<Message: 'static> {
     pub(in netlink) handle: BoundHandle<Message>,
     pub(in netlink) remote_addr: NetlinkSocketAddr,
     pub(in netlink) receive_queue: Arc<Mutex<MessageQueue<Message>>>,
+    /// The credentials of the message most recently dequeued by `try_recv`.
+    /// Receivers with `SO_PASSCRED` report these; kernel-originated messages
+    /// use the kernel identity.
+    pub(in netlink) last_recv_cred: Mutex<CUserCred>,
 }
 
 impl<Message: 'static> BoundNetlink<Message> {
@@ -25,6 +30,7 @@ impl<Message: 'static> BoundNetlink<Message> {
             handle,
             remote_addr: NetlinkSocketAddr::new_unspecified(),
             receive_queue: message_queue,
+            last_recv_cred: Mutex::new(CUserCred::new_kernel()),
         }
     }
 

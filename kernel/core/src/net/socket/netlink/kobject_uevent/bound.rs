@@ -4,10 +4,16 @@ use super::message::UeventMessage;
 use crate::{
     events::IoEvents,
     net::socket::{
-        netlink::{NetlinkSocketAddr, common::BoundNetlink},
+        netlink::{
+            NetlinkSocketAddr,
+            common::BoundNetlink,
+            table::{NetlinkUeventProtocol, SupportedNetlinkProtocol},
+        },
+        unix::CUserCred,
         util::{RecvFlags, RecvOutput, SendFlags, datagram_common},
     },
     prelude::*,
+    process::posix_thread::AsPosixThread,
     util::{MultiRead, MultiWrite},
 };
 
@@ -43,16 +49,33 @@ impl datagram_common::Bound for BoundNetlinkUevent {
             warn!("unsupported flags: {:?}", flags);
         }
 
-        if *remote != NetlinkSocketAddr::new_unspecified() {
-            return_errno_with_message!(
-                Errno::ECONNREFUSED,
-                "sending uevent messages to user space is not supported"
-            );
+        let total = reader.sum_lens();
+
+        // A zero port addresses the kernel socket, which has nothing to do
+        // with the message; ignore it and report success, as before.
+        if remote.port() == 0 {
+            return Ok(total);
         }
 
-        // FIXME: How to deal with sending message to kernel socket?
-        // Here we simply ignore the message and return the message length.
-        Ok(reader.sum_lens())
+        // Unicast to another user-space netlink socket. This is how udevd
+        // relays a uevent to its worker processes: each worker's monitor
+        // binds its own port and the manager sends the message there.
+        let mut data = vec![0u8; total];
+        let mut writer = VmWriter::from(data.as_mut_slice());
+        let copied = reader
+            .read(&mut writer)
+            .map_err(|(err, _)| Error::from(err))?;
+        data.truncate(copied);
+
+        let cred = {
+            let thread = current_thread!();
+            let credentials = thread.as_posix_thread().unwrap().credentials();
+            CUserCred::new(current!().pid(), credentials.ruid(), credentials.rgid())
+        };
+        let message = UeventMessage::from_bytes(data, self.handle.addr(), cred);
+        NetlinkUeventProtocol::unicast(remote.port(), message)?;
+
+        Ok(total)
     }
 
     fn try_recv(
@@ -72,6 +95,7 @@ impl datagram_common::Bound for BoundNetlinkUevent {
             response.write_to(writer)?;
 
             let remote = *response.src_addr();
+            *self.last_recv_cred.lock() = *response.cred();
 
             let should_dequeue = flags.receive_behavior().will_consume_data();
             let output = RecvOutput::new_for_packet(flags, copied_len, response_len);
