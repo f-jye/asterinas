@@ -28,6 +28,7 @@
   # please refer to https://search.nixos.org/options.
   imports = [
     ./modules/core.nix
+    ./modules/gnome/default.nix
     ./modules/xfce/default.nix
     ./modules/container.nix
     ./modules/systemd.nix
