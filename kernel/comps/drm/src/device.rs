@@ -7,14 +7,25 @@ use alloc::{
 use core::{
     fmt::Debug,
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
+    time::Duration,
 };
 
-use aster_core::prelude::*;
+use aster_core::{prelude::*, sleep, spawn_kernel_thread};
 use aster_framebuffer::framebuffer::FrameBuffer;
 use ostd::sync::Mutex;
 use sparse_id_alloc::SparseIdAlloc;
 
 use super::gem;
+
+/// The emulated refresh cycle of the continuous scanout.
+///
+/// Real hardware scans out the active framebuffer on every refresh cycle,
+/// regardless of how user space writes into it. This device implements
+/// scanout as a copy into the boot framebuffer, so user space writes that are
+/// not followed by a mode-set or a page flip would otherwise never become
+/// visible. The refresh thread re-presents the current framebuffer at this
+/// rate to emulate the hardware behavior.
+const SCANOUT_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
 
 static DRM_DEVICE_INDEX_ALLOCATOR: Mutex<SparseIdAlloc> = Mutex::new(SparseIdAlloc::new(0, 63));
 
@@ -166,6 +177,37 @@ impl RegisteredDrmDevice {
             master: Mutex::new(None),
             kms: Mutex::new(Kms::default()),
         })
+    }
+
+    /// Spawns the thread that emulates the continuous scanout of hardware.
+    ///
+    /// See [`SCANOUT_REFRESH_INTERVAL`] for why the re-presentation loop is
+    /// needed. The thread keeps only a weak reference to the device, so it
+    /// stops when the device is unregistered.
+    pub(super) fn spawn_scanout_refresh(self: &Arc<Self>) {
+        let device = Arc::downgrade(self);
+        spawn_kernel_thread(move || {
+            loop {
+                sleep(SCANOUT_REFRESH_INTERVAL);
+                let Some(device) = device.upgrade() else {
+                    return;
+                };
+                let Some(scanout) = device.device().scanout() else {
+                    return;
+                };
+                let presentation = {
+                    let kms = device.kms().lock();
+                    let current_fb = kms.current_fb().lock();
+                    let fb = current_fb
+                        .as_ref()
+                        .and_then(|fb_id| kms.fbs().lock().get(fb_id).copied());
+                    kms.loaded_gem().zip(fb)
+                };
+                if let Some((gem, fb)) = presentation {
+                    gem.present(&scanout, &fb);
+                }
+            }
+        });
     }
 
     pub(super) fn index(&self) -> u32 {

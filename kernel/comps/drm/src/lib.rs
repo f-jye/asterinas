@@ -53,6 +53,13 @@ mod minor;
 
 pub fn register_device(device: Arc<dyn DrmDevice>) -> Result<()> {
     let registered_device = Arc::new(RegisteredDrmDevice::new(device)?);
+    if registered_device
+        .device()
+        .has_features(DrmFeatures::MODESET)
+        && registered_device.device().scanout().is_some()
+    {
+        registered_device.spawn_scanout_refresh();
+    }
     let render_minor = if registered_device.device().has_features(DrmFeatures::RENDER) {
         let minor = DrmMinor::new(registered_device.clone(), DrmMinorType::Render);
         char::register(minor.clone())?;
