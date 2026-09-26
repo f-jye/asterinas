@@ -33,4 +33,6 @@ impl_socket_options!(
     pub(crate) struct SendBufForce(u32);
     pub(crate) struct RecvBufForce(u32);
     pub(crate) struct PeerGroups(Arc<[Gid]>);
+    pub(crate) struct AttachFilter(u32);
+    pub(crate) struct DetachFilter(u32);
 );
