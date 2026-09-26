@@ -22,7 +22,7 @@ use core::fmt::Debug;
 
 use aster_core::prelude::*;
 use aster_drm::device::{DrmDevice, DrmFeatures};
-use aster_framebuffer::{framebuffer, framebuffer::FrameBuffer};
+use aster_framebuffer::framebuffer::{self, FrameBuffer};
 use component::{ComponentInitError, init_component};
 
 const SIMPLEDRM_NAME: &str = "simpledrm";

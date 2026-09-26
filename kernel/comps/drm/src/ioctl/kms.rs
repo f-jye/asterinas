@@ -14,20 +14,15 @@ use aster_core::{prelude::*, util::ioctl::write_user_value};
 use aster_framebuffer::framebuffer::FrameBuffer;
 use ostd::mm::HasSize;
 
-use super::super::device::{CONNECTOR_ID, CRTC_ID, ENCODER_ID, KmsFb};
-use crate::{
-    file::DrmFile,
-    ioctl::{
-        DrmIoctlAddFb, DrmIoctlCreateDumb, DrmIoctlDestroyDumb, DrmIoctlMapDumb,
-        DrmIoctlModeGetConnector, DrmIoctlModeGetCrtc, DrmIoctlModeGetEncoder, DrmIoctlModeGetFb,
-        DrmIoctlModeGetResources, DrmIoctlModeSetCrtc, DrmIoctlRmFb,
-    },
+use super::{
+    super::device::{CONNECTOR_ID, CRTC_ID, ENCODER_ID, KmsFb},
+    ioctl_defs::*,
 };
+use crate::file::DrmFile;
 
 /// Modesetting ioctl argument layouts, transcribed from Linux's
 /// `include/uapi/drm/drm_mode.h`.
 pub(super) mod abi {
-
     /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L252>.
     #[repr(C)]
     #[derive(Clone, Copy, Debug, Default, Pod)]
@@ -148,6 +143,27 @@ pub(super) mod abi {
         pub handle: u32,
         pub pad: u32,
         pub offset: u64,
+    }
+
+    /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L625>.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Pod)]
+    pub struct ModeObjGetProps {
+        pub props_ptr: u64,
+        pub prop_values_ptr: u64,
+        pub count_props: u32,
+        pub obj_id: u32,
+        pub obj_type: u32,
+        pub __pad: u32,
+    }
+
+    /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/include/uapi/drm/drm_mode.h#L1452>.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Pod)]
+    pub struct ModeListLessees {
+        pub count_lessees: u32,
+        pub pad: u32,
+        pub lessees_ptr: u64,
     }
 }
 
@@ -276,6 +292,7 @@ impl DrmFile {
     }
 
     pub(super) fn mode_get_crtc(&self, cmd: DrmIoctlModeGetCrtc) -> Result<i32> {
+        let scanout = self.scanout_or_err()?;
         let mut args: abi::ModeCrtc = cmd.read()?;
         if args.crtc_id != CRTC_ID {
             return_errno_with_message!(Errno::ENOENT, "no such CRTC");
@@ -287,7 +304,6 @@ impl DrmFile {
         args.y = 0;
         args.gamma_size = 0;
         args.mode_valid = 1;
-        let scanout = self.scanout_or_err()?;
         args.mode = Self::mode_info(&scanout);
         cmd.write(&args)?;
         Ok(0)
@@ -417,6 +433,28 @@ impl DrmFile {
         if args.handle != 1 {
             return_errno_with_message!(Errno::ENOENT, "no such dumb buffer");
         }
+        Ok(0)
+    }
+
+    pub(super) fn mode_obj_get_props(&self, cmd: DrmIoctlObjGetProps) -> Result<i32> {
+        let mut args: abi::ModeObjGetProps = cmd.read()?;
+
+        // No properties are exposed: user space sees a connector without
+        // EDID or DPMS properties, which the modesetting driver tolerates.
+        // Reporting success (instead of ENOTTY) matters because libdrm's
+        // `drmModeObjectGetProperties` returns NULL on failure and the
+        // driver dereferences it unchecked.
+        args.count_props = 0;
+        cmd.write(&args)?;
+        Ok(0)
+    }
+
+    pub(super) fn mode_list_lessees(&self, cmd: DrmIoctlListLessees) -> Result<i32> {
+        let mut args: abi::ModeListLessees = cmd.read()?;
+
+        // DRM leases are not implemented; this device has no lessees.
+        args.count_lessees = 0;
+        cmd.write(&args)?;
         Ok(0)
     }
 }

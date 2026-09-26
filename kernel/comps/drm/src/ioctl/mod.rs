@@ -87,6 +87,14 @@ impl DrmFile {
                 self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
                 self.mode_destroy_dumb(cmd)
             }
+            cmd @ DrmIoctlObjGetProps => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_obj_get_props(cmd)
+            }
+            cmd @ DrmIoctlListLessees => {
+                self.check_ioctl_requirements(DrmIoctlAccess::empty(), DrmFeatures::MODESET)?;
+                self.mode_list_lessees(cmd)
+            }
             _ => {
                 ostd::warn!(
                     "unknown ioctl minor={:?} cmd={:#x}",
@@ -163,7 +171,7 @@ mod ioctl_defs {
         general::{DrmAuth, DrmGetCap, DrmSetClientCap, DrmUnique, DrmVersion},
         kms::abi::{
             ModeCardRes, ModeCreateDumb, ModeCrtc, ModeFbCmd, ModeGetConnector, ModeGetEncoder,
-            ModeMapDumb,
+            ModeListLessees, ModeMapDumb, ModeObjGetProps,
         },
     };
 
@@ -192,13 +200,17 @@ mod ioctl_defs {
     pub(super) type DrmIoctlModeGetConnector =
         ioc!(DRM_IOCTL_MODE_GETCONNECTOR, b'd', 0xA7, InOutData<ModeGetConnector>);
     pub(super) type DrmIoctlModeGetFb =
-        ioc!(DRM_IOCTL_MODE_GETFB, b'd', 0xAA, InOutData<ModeFbCmd>);
-    pub(super) type DrmIoctlAddFb = ioc!(DRM_IOCTL_MODE_ADDFB, b'd', 0xAB, InOutData<ModeFbCmd>);
-    pub(super) type DrmIoctlRmFb = ioc!(DRM_IOCTL_MODE_RMFB, b'd', 0xAC, InData<u32>);
+        ioc!(DRM_IOCTL_MODE_GETFB, b'd', 0xAD, InOutData<ModeFbCmd>);
+    pub(super) type DrmIoctlAddFb = ioc!(DRM_IOCTL_MODE_ADDFB, b'd', 0xAE, InOutData<ModeFbCmd>);
+    pub(super) type DrmIoctlRmFb = ioc!(DRM_IOCTL_MODE_RMFB, b'd', 0xAF, InData<u32>);
     pub(super) type DrmIoctlCreateDumb =
         ioc!(DRM_IOCTL_MODE_CREATE_DUMB, b'd', 0xB2, InOutData<ModeCreateDumb>);
     pub(super) type DrmIoctlMapDumb =
         ioc!(DRM_IOCTL_MODE_MAP_DUMB, b'd', 0xB3, InOutData<ModeMapDumb>);
     pub(super) type DrmIoctlDestroyDumb =
         ioc!(DRM_IOCTL_MODE_DESTROY_DUMB, b'd', 0xB4, InData<ModeCreateDumb>);
+    pub(super) type DrmIoctlObjGetProps =
+        ioc!(DRM_IOCTL_MODE_OBJ_GETPROPS, b'd', 0xB9, InOutData<ModeObjGetProps>);
+    pub(super) type DrmIoctlListLessees =
+        ioc!(DRM_IOCTL_MODE_LIST_LESSEES, b'd', 0xC7, InOutData<ModeListLessees>);
 }
