@@ -28,15 +28,11 @@
   };
 
   systemd.targets.getty.wants =
-    # tty1: provide text login ONLY when X server is disabled.
-    # Other VTs: always provide text logins
+    # The kernel does not implement virtual terminals (VTs), so text
+    # logins are only provided on the consoles that actually exist:
+    # tty1 (when X is disabled) and the virtio console hvc0.
     (lib.optional (!config.services.xserver.enable) "autovt@tty1.service") ++ [
       "autovt@hvc0.service"
-      "autovt@tty2.service"
-      "autovt@tty3.service"
-      "autovt@tty4.service"
-      "autovt@tty5.service"
-      "autovt@tty6.service"
     ];
 
   systemd.settings.Manager = {

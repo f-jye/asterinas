@@ -176,14 +176,14 @@ bitflags::bitflags! {
 mod ioctl_defs {
     use aster_core::{
         ioc,
-        util::ioctl::{InData, InOutData, NoData, OutData},
+        util::ioctl::{InOutData, NoData, OutData},
     };
 
     use super::{
         general::{DrmAuth, DrmGetCap, DrmSetClientCap, DrmUnique, DrmVersion},
         kms::abi::{
-            GemClose, ModeCardRes, ModeCreateDumb, ModeCrtc, ModeCrtcPageFlip, ModeFbCmd,
-            ModeFbCmd2, ModeGetConnector, ModeGetEncoder, ModeListLessees, ModeMapDumb,
+            GemClose, ModeCardRes, ModeCreateDumb, ModeCrtc, ModeCrtcPageFlip, ModeDestroyDumb,
+            ModeFbCmd, ModeFbCmd2, ModeGetConnector, ModeGetEncoder, ModeListLessees, ModeMapDumb,
             ModeObjGetProps,
         },
     };
@@ -197,9 +197,9 @@ mod ioctl_defs {
     pub(super) type DrmIoctlGetCap =
         ioc!(DRM_IOCTL_GET_CAP, b'd', 0x0c, InOutData<DrmGetCap>);
     pub(super) type DrmIoctlSetClientCap =
-        ioc!(DRM_IOCTL_SET_CLIENT_CAP, b'd', 0x0d, InData<DrmSetClientCap>);
+        ioc!(DRM_IOCTL_SET_CLIENT_CAP, b'd', 0x0d, InOutData<DrmSetClientCap>);
     pub(super) type DrmIoctlAuthMagic =
-        ioc!(DRM_IOCTL_AUTH_MAGIC, b'd', 0x11, InData<DrmAuth>);
+        ioc!(DRM_IOCTL_AUTH_MAGIC, b'd', 0x11, InOutData<DrmAuth>);
     pub(super) type DrmIoctlSetMaster = ioc!(DRM_IOCTL_SET_MASTER, b'd', 0x1e, NoData);
     pub(super) type DrmIoctlDropMaster = ioc!(DRM_IOCTL_DROP_MASTER, b'd', 0x1f, NoData);
     pub(super) type DrmIoctlModeGetResources =
@@ -207,7 +207,7 @@ mod ioctl_defs {
     pub(super) type DrmIoctlModeGetCrtc =
         ioc!(DRM_IOCTL_MODE_GETCRTC, b'd', 0xA1, InOutData<ModeCrtc>);
     pub(super) type DrmIoctlModeSetCrtc =
-        ioc!(DRM_IOCTL_MODE_SETCRTC, b'd', 0xA2, InData<ModeCrtc>);
+        ioc!(DRM_IOCTL_MODE_SETCRTC, b'd', 0xA2, InOutData<ModeCrtc>);
     pub(super) type DrmIoctlModeGetEncoder =
         ioc!(DRM_IOCTL_MODE_GETENCODER, b'd', 0xA6, InOutData<ModeGetEncoder>);
     pub(super) type DrmIoctlModeGetConnector =
@@ -215,7 +215,7 @@ mod ioctl_defs {
     pub(super) type DrmIoctlModeGetFb =
         ioc!(DRM_IOCTL_MODE_GETFB, b'd', 0xAD, InOutData<ModeFbCmd>);
     pub(super) type DrmIoctlAddFb = ioc!(DRM_IOCTL_MODE_ADDFB, b'd', 0xAE, InOutData<ModeFbCmd>);
-    pub(super) type DrmIoctlRmFb = ioc!(DRM_IOCTL_MODE_RMFB, b'd', 0xAF, InData<u32>);
+    pub(super) type DrmIoctlRmFb = ioc!(DRM_IOCTL_MODE_RMFB, b'd', 0xAF, InOutData<u32>);
     pub(super) type DrmIoctlModePageFlip =
         ioc!(DRM_IOCTL_MODE_PAGE_FLIP, b'd', 0xB0, InOutData<ModeCrtcPageFlip>);
     pub(super) type DrmIoctlCreateDumb =
@@ -223,7 +223,7 @@ mod ioctl_defs {
     pub(super) type DrmIoctlMapDumb =
         ioc!(DRM_IOCTL_MODE_MAP_DUMB, b'd', 0xB3, InOutData<ModeMapDumb>);
     pub(super) type DrmIoctlDestroyDumb =
-        ioc!(DRM_IOCTL_MODE_DESTROY_DUMB, b'd', 0xB4, InData<ModeCreateDumb>);
+        ioc!(DRM_IOCTL_MODE_DESTROY_DUMB, b'd', 0xB5, InOutData<ModeDestroyDumb>);
     pub(super) type DrmIoctlAddFb2 =
         ioc!(DRM_IOCTL_MODE_ADDBFB2, b'd', 0xB8, InOutData<ModeFbCmd2>);
     pub(super) type DrmIoctlObjGetProps =
