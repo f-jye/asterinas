@@ -630,7 +630,12 @@ impl PathResolver {
         let target_path = if super::is_dot(name) {
             return Ok(path.this());
         } else if super::is_dotdot(name) {
-            self.resolve_parent(path).unwrap_or_else(|| path.this())
+            // `..` never crosses into a mount stacked on top of the current
+            // directory, so unlike a normal name lookup, the result must not
+            // be normalized with `get_top_path`. Otherwise, for a mount root
+            // with a stacked mount, `.` and `..` would resolve to different
+            // mounts, confusing root detection in user space (e.g., systemd).
+            return Ok(self.resolve_parent(path).unwrap_or_else(|| path.this()));
         } else {
             let target_dentry = dir_dentry.lookup_child(name)?;
             Path::new(path.mount.clone(), target_dentry)
