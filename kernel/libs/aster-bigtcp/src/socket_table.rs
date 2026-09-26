@@ -4,7 +4,7 @@
 //! for efficiently inserting, looking up, and removing sockets.
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use core::net::Ipv4Addr;
+use core::net::{Ipv4Addr, Ipv6Addr};
 
 use jhash::{jhash_1vals, jhash_3vals, jhash_u32_array};
 use ostd::const_assert;
@@ -266,6 +266,22 @@ impl<E: Ext> SocketTable<E> {
     }
 
     pub(crate) fn lookup_listener(&self, key: &ListenerKey) -> Option<&Arc<TcpListenerBg<E>>> {
+        self.lookup_listener_exact(key).or_else(|| {
+            // Fall back to a wildcard listener on the same port: a socket
+            // listening on an unspecified address (0.0.0.0/::) accepts
+            // connections to any local address, as in Linux.
+            let wildcard_addr = match key.addr {
+                IpAddress::Ipv4(_) => IpAddress::Ipv4(Ipv4Addr::UNSPECIFIED),
+                IpAddress::Ipv6(_) => IpAddress::Ipv6(Ipv6Addr::UNSPECIFIED),
+            };
+            if wildcard_addr == key.addr {
+                return None;
+            }
+            self.lookup_listener_exact(&ListenerKey::new(wildcard_addr, key.port))
+        })
+    }
+
+    fn lookup_listener_exact(&self, key: &ListenerKey) -> Option<&Arc<TcpListenerBg<E>>> {
         let bucket = {
             let hash = key.hash();
             let bucket_index = hash & LISTENER_BUCKET_MASK;
