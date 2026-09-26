@@ -242,14 +242,6 @@ impl<C: SysObj + ?Sized, T: SysBranchNode> AttrLessBranchNodeFields<C, T> {
     pub fn attr_set(&self) -> &Arc<SysAttrSet> {
         SysAttrSet::empty()
     }
-
-    /// Creates attribute-less branch fields with an empty name for a root node.
-    fn new_root(weak_self: Weak<T>) -> Self {
-        Self {
-            base: ObjFields::new_root(weak_self),
-            children: RwMutex::new(BTreeMap::new()),
-        }
-    }
 }
 
 /// Fields for normal branch nodes in the `SysTree`.
@@ -817,6 +809,41 @@ macro_rules! inherit_sys_symlink_node {
     ($struct_name:ident, $field:ident) => {
         $crate::inherit_sys_symlink_node!($struct_name, $field, {/* no overrides */});
     };
+}
+
+/// Computes the relative path from the directory `from_dir` to the target `to`.
+///
+/// Both arguments are absolute paths within one `SysTree` as returned by
+/// [`SysObj::path`] (the root is `/`). The result is suitable as the target of a
+/// symlink placed inside `from_dir`, e.g. the relative path from `/class/mem` to
+/// `/devices/virtual/mem/null` is `../../devices/virtual/mem/null`.
+///
+/// The result always ends with the last component of `to`, as the symlinks in
+/// Linux's sysfs do: the relative path from `/devices/a/b/c` to `/devices/a`
+/// is `../../../a`, not `../..`.
+pub fn relative_path(from_dir: &str, to: &str) -> String {
+    let from: alloc::vec::Vec<&str> = from_dir.split('/').filter(|s| !s.is_empty()).collect();
+    let to: alloc::vec::Vec<&str> = to.split('/').filter(|s| !s.is_empty()).collect();
+    let Some((last, to_parent)) = to.split_last() else {
+        // The target is the root, which no symlink should point to.
+        return String::from("/");
+    };
+    let common = from
+        .iter()
+        .zip(to_parent.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    let mut result = String::new();
+    for _ in common..from.len() {
+        result.push_str("../");
+    }
+    for component in &to_parent[common..] {
+        result.push_str(component);
+        result.push('/');
+    }
+    result.push_str(last);
+    result
 }
 
 /// An empty node in the `SysTree`.
