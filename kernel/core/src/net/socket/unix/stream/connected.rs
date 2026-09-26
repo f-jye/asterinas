@@ -3,6 +3,7 @@
 use core::{
     num::Wrapping,
     sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
 };
 
 use spin::Once;
@@ -153,7 +154,13 @@ impl Connected {
             }
 
             let ctrl_msgs = if is_pass_cred {
-                AuxiliaryData::default().generate_control(behavior, is_pass_cred)
+                // TODO: Deliver per-segment timestamps on stream and seqpacket sockets.
+                AuxiliaryData::default().generate_control(
+                    behavior,
+                    is_pass_cred,
+                    false,
+                    Duration::ZERO,
+                )
             } else {
                 Vec::new()
             };
@@ -250,7 +257,11 @@ impl Connected {
             let aux_data = all_aux.get_mut(aux_pos - 1).unwrap();
             debug_assert!((aux_data.start - read_base).0 <= read_tot_len);
 
-            let ctrl_msgs = aux_data.data.generate_control(behavior, is_pass_cred);
+            // TODO: Deliver per-segment timestamps on stream and seqpacket sockets.
+            let ctrl_msgs =
+                aux_data
+                    .data
+                    .generate_control(behavior, is_pass_cred, false, Duration::ZERO);
             if behavior.will_consume_data() {
                 let remaining_aux_count = all_aux.len() - (aux_pos - 1);
                 all_aux.retain_back(remaining_aux_count);
@@ -267,7 +278,7 @@ impl Connected {
             ctrl_msgs
         } else {
             let mut default_aux_data = AuxiliaryData::default();
-            default_aux_data.generate_control(behavior, is_pass_cred)
+            default_aux_data.generate_control(behavior, is_pass_cred, false, Duration::ZERO)
         };
 
         debug_assert!(is_seqpacket || read_tot_len != 0);

@@ -17,7 +17,7 @@ use crate::{
         options::{
             AcceptConn, AttachFilter, Broadcast, DetachFilter, KeepAlive, Linger, PassCred,
             PeerCred, PeerGroups, Priority, RecvBuf, RecvBufForce, RecvTimeout, ReuseAddr,
-            ReusePort, SendBuf, SendBufForce, SendTimeout, SocketOption, SocketType,
+            ReusePort, SendBuf, SendBufForce, SendTimeout, SocketOption, SocketType, Timestamp,
             macros::{sock_option_mut, sock_option_ref},
         },
         unix::{CUserCred, UNIX_DATAGRAM_DEFAULT_BUF_SIZE, UNIX_STREAM_DEFAULT_BUF_SIZE},
@@ -41,6 +41,7 @@ pub(crate) struct SocketOptionSet {
     linger: LingerOption,
     reuse_port: bool,
     pass_cred: bool,
+    timestamp: bool,
 }
 
 impl Default for SocketOptionSet {
@@ -55,6 +56,7 @@ impl Default for SocketOptionSet {
             linger: LingerOption::default(),
             reuse_port: false,
             pass_cred: false,
+            timestamp: false,
         }
     }
 }
@@ -162,6 +164,12 @@ impl SocketOptionSet {
                 let pass_cred = self.pass_cred();
                 socket_pass_cred.set(pass_cred);
             }
+            socket_timestamp @ Timestamp => {
+                // This option only affects UNIX datagram sockets. However, it also works well
+                // with other sockets for setting and getting.
+                let timestamp = self.timestamp();
+                socket_timestamp.set(timestamp);
+            }
             socket_peer_cred @ PeerCred => {
                 let peer_cred = CUserCred::new_invalid();
                 socket_peer_cred.set(peer_cred);
@@ -255,6 +263,13 @@ impl SocketOptionSet {
                 let pass_cred = socket_pass_cred.get().unwrap();
                 self.set_pass_cred(*pass_cred);
                 socket.set_pass_cred(*pass_cred);
+            }
+            socket_timestamp @ Timestamp => {
+                // This option only affects UNIX datagram sockets. However, it also works well
+                // with other sockets for setting and getting.
+                let timestamp = socket_timestamp.get().unwrap();
+                self.set_timestamp(*timestamp);
+                socket.set_timestamp(*timestamp);
             }
             socket_sendbuf_force @ SendBufForce => {
                 check_current_privileged()?;
@@ -426,6 +441,9 @@ pub(in crate::net) trait SetSocketLevelOption {
     }
     /// Sets whether receipt of the credentials of the sending process is enabled.
     fn set_pass_cred(&self, _pass_cred: bool) {}
+
+    /// Sets whether received messages are delivered with a timestamp.
+    fn set_timestamp(&self, _timestamp: bool) {}
 
     /// Returns timeout values for blocking socket operations.
     fn socket_timeouts(&self) -> Option<&SocketTimeouts> {

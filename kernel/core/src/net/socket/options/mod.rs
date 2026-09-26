@@ -29,6 +29,7 @@ impl_socket_options!(
     pub(crate) struct ReusePort(bool);
     pub(crate) struct PassCred(bool);
     pub(crate) struct PeerCred(CUserCred);
+    pub(crate) struct Timestamp(bool);
     pub(crate) struct AcceptConn(bool);
     pub(crate) struct SendBufForce(u32);
     pub(crate) struct RecvBufForce(u32);

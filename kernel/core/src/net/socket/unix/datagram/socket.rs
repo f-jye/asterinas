@@ -367,6 +367,10 @@ impl SetSocketLevelOption for (&MessageReceiver, &SocketTimeouts) {
         self.0.set_pass_cred(pass_cred);
     }
 
+    fn set_timestamp(&self, timestamp: bool) {
+        self.0.set_timestamp(timestamp);
+    }
+
     fn socket_timeouts(&self) -> Option<&SocketTimeouts> {
         Some(self.1)
     }

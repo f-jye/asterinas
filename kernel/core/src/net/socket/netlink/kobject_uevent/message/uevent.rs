@@ -117,6 +117,7 @@ impl Uevent {
     }
 
     /// Creates a new uevent from synthetic uevent.
+    #[cfg_attr(not(ktest), expect(dead_code))]
     pub(super) fn new_from_syn(
         synth_uevent: SyntheticUevent,
         devpath: String,
