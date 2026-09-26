@@ -23,7 +23,9 @@ bitflags! {
         const MSG_ZEROCOPY  = 0x4000000;
         const MSG_FASTOPEN  = 0x20000000;
 
-        const SUPPORTED     = 0x0;
+        // `MSG_NOSIGNAL` is honored trivially: the kernel never raises
+        // `SIGPIPE` on `EPIPE`, which is exactly what the flag requests.
+        const SUPPORTED     = Self::MSG_NOSIGNAL.bits;
     }
 }
 
