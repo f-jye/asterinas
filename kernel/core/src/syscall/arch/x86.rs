@@ -113,6 +113,7 @@ use super::{
     rt_sigaction::sys_rt_sigaction,
     rt_sigpending::sys_rt_sigpending,
     rt_sigprocmask::sys_rt_sigprocmask,
+    rt_sigqueueinfo::sys_rt_sigqueueinfo,
     rt_sigreturn::sys_rt_sigreturn,
     rt_sigsuspend::sys_rt_sigsuspend,
     rt_sigtimedwait::sys_rt_sigtimedwait,
@@ -304,6 +305,7 @@ impl_syscall_nums_and_dispatch_fn! {
     SYS_CAPSET = 126           => sys_capset(args[..2]);
     SYS_RT_SIGPENDING = 127    => sys_rt_sigpending(args[..2]);
     SYS_RT_SIGTIMEDWAIT = 128  => sys_rt_sigtimedwait(args[..4]);
+    SYS_RT_SIGQUEUEINFO = 129  => sys_rt_sigqueueinfo(args[..3]);
     SYS_RT_SIGSUSPEND = 130    => sys_rt_sigsuspend(args[..2]);
     SYS_SIGALTSTACK = 131      => sys_sigaltstack(args[..2], &user_ctx);
     SYS_UTIME = 132            => sys_utime(args[..2]);

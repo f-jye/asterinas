@@ -105,4 +105,10 @@ impl CUserCred {
             gid: Gid::OVERFLOW,
         }
     }
+
+    /// Creates credentials with explicit fields, as used for netlink
+    /// messages sent by another user-space socket.
+    pub(in crate::net) const fn new(pid: Pid, uid: Uid, gid: Gid) -> Self {
+        Self { pid, uid, gid }
+    }
 }

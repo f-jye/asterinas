@@ -110,6 +110,7 @@ macro_rules! import_generic_syscall_entries {
             rt_sigaction::sys_rt_sigaction,
             rt_sigpending::sys_rt_sigpending,
             rt_sigprocmask::sys_rt_sigprocmask,
+            rt_sigqueueinfo::sys_rt_sigqueueinfo,
             rt_sigreturn::sys_rt_sigreturn,
             rt_sigsuspend::sys_rt_sigsuspend,
             rt_sigtimedwait::sys_rt_sigtimedwait,
@@ -321,6 +322,7 @@ macro_rules! define_syscalls_with_generic_syscall_table {
             SYS_RT_SIGPROCMASK = 135         => sys_rt_sigprocmask(args[..4]);
             SYS_RT_SIGPENDING = 136          => sys_rt_sigpending(args[..2]);
             SYS_RT_SIGTIMEDWAIT = 137        => sys_rt_sigtimedwait(args[..4]);
+            SYS_RT_SIGQUEUEINFO = 138        => sys_rt_sigqueueinfo(args[..3]);
             SYS_RT_SIGRETURN = 139           => sys_rt_sigreturn(args[..0], &mut user_ctx);
             SYS_SET_PRIORITY = 140           => sys_set_priority(args[..3]);
             SYS_GET_PRIORITY = 141           => sys_get_priority(args[..2]);
