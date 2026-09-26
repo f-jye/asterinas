@@ -61,6 +61,7 @@ impl DrmMinor {
         self.registered_device.device()
     }
 
+    /// Returns the DRM-core state shared by all minors of this device.
     pub(super) fn registered_device(&self) -> &Arc<RegisteredDrmDevice> {
         &self.registered_device
     }
