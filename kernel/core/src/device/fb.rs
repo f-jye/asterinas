@@ -225,9 +225,24 @@ mod ioctl_defs {
     pub(super) type Blank            = ioc!(FBIOBLANK,           0x4611, NoData);
 }
 
-impl Fb {
-    /// Opens the framebuffer and returns its file handle.
-    fn new_handle(&self) -> Result<Box<dyn PerOpenFileOps>> {
+impl Device for Fb {
+    fn type_(&self) -> DeviceType {
+        DeviceType::Char
+    }
+
+    fn id(&self) -> DeviceId {
+        // Same value with Linux: major 29, minor 0
+        DeviceId::new(MajorId::new(29), MinorId::new(0))
+    }
+
+    fn devtmpfs_meta(&self) -> Option<DevtmpfsNodeMeta> {
+        // The device model creates the /dev/fb0 node together with the sysfs
+        // topology (see `init_graphics_sysfs`); registering a second node here
+        // would duplicate it.
+        None
+    }
+
+    fn open(&self) -> Result<Box<dyn PerOpenFileOps>> {
         let Some(framebuffer) = FRAMEBUFFER.get() else {
             return Err(Error::with_message(
                 Errno::ENODEV,
@@ -629,34 +644,46 @@ pub(super) fn init_in_first_kthread() {
         return;
     }
 
-    // The framebuffer hangs off a firmware-provided platform device, as
-    // Linux's `simple-framebuffer` does. The `device` link this parent gives
-    // the fb device (through which `subsystem` resolves to `platform`) is
-    // what user space (e.g. Xorg's fbdevhw) expects to find.
-    let bus = PLATFORM_BUS.call_once(|| {
-        aster_device::register_bus(PlatformBus)
-            .expect("the `platform` bus must not be registered twice")
-    });
-    let platform_device = PLATFORM_DEVICE.call_once(|| {
-        let device = BusDevice::builder(bus, "simple-framebuffer.0", ()).build();
-        aster_device::add(&device).expect("failed to add the simple-framebuffer platform device");
-        device
-    });
+    // The device model publishes the sysfs topology (/sys/class/graphics/fb0,
+    // the subsystem links, and /sys/dev/char/29:0) and creates the /dev/fb0
+    // node itself, so the char registry only wires `open` to the device.
+    // Without the topology, Xorg's fbdev driver refuses to claim the device.
+    init_graphics_sysfs();
 
-    let class = FB_CLASS.call_once(|| {
-        aster_device::register_class(GraphicsClass)
-            .expect("the `graphics` class must not be registered twice")
-    });
-    // Same value with Linux: major 29, minor 0
-    let id = DeviceId::new(MajorId::new(29), MinorId::new(0));
-    let device = ClassDevice::builder(class, "fb0", Fb)
-        .devnum(DevNum::char(id))
-        .parent(platform_device.clone())
+    char::register(Arc::new(Fb)).expect("failed to register framebuffer char device");
+}
+
+/// The `graphics` class: framebuffer devices exposed as `/dev/fbN`.
+struct GraphicsClass;
+
+impl aster_device::Class for GraphicsClass {
+    const NAME: &'static str = "graphics";
+    type Device = Arc<Fb>;
+
+    fn devnode(
+        &self,
+        dev: &aster_device::ClassDevice<Self>,
+    ) -> Option<aster_device::DevNode> {
+        use aster_device::AnyDevice;
+        Some(aster_device::DevNode {
+            path: Some(aster_device::SysStr::from(dev.base().name().to_string())),
+            mode: None,
+        })
+    }
+}
+
+/// Places the framebuffer in the device model so that
+/// `/sys/class/graphics/fb0/device/subsystem` resolves, which is what Xorg's
+/// fbdev driver checks before it claims the device.
+fn init_graphics_sysfs() {
+    let fb_class = aster_device::register_class(GraphicsClass)
+        .expect("failed to register the graphics class");
+    let fb_dev = aster_device::ClassDevice::builder(&fb_class, "fb0", Arc::new(Fb))
+        .parent(super::platform::parent())
+        .devnum(aster_device::DevNum::char(DeviceId::new(
+            MajorId::new(29),
+            MinorId::new(0),
+        )))
         .build();
-
-    // The device model publishes sysfs topology (class dir, subsystem link,
-    // dev attribute, /sys/dev/char entry) and creates the /dev node itself,
-    // so the char registry only wires `open` to the device.
-    aster_device::add(&device).expect("failed to add the framebuffer device");
-    char::register(device).expect("failed to register framebuffer char device");
+    aster_device::add(&fb_dev).expect("failed to add the framebuffer device");
 }
