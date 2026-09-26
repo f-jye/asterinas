@@ -25,7 +25,8 @@ bitflags! {
 
         // `MSG_NOSIGNAL` is honored trivially: the kernel never raises
         // `SIGPIPE` on `EPIPE`, which is exactly what the flag requests.
-        const SUPPORTED     = Self::MSG_NOSIGNAL.bits;
+        // `MSG_DONTWAIT` makes the single send operation non-blocking.
+        const SUPPORTED     = Self::MSG_NOSIGNAL.bits | Self::MSG_DONTWAIT.bits;
     }
 }
 
@@ -52,7 +53,13 @@ bitflags! {
         const MSG_SOCK_DEVMEM  = 0x2000000;
         const MSG_CMSG_CLOEXEC = 0x40000000;
 
-        const SUPPORTED        = RecvFlags::MSG_PEEK.bits | RecvFlags::MSG_TRUNC.bits;
+        // `MSG_DONTWAIT` makes the single receive operation non-blocking.
+        // `MSG_CMSG_CLOEXEC` sets the close-on-exec flag on the file
+        // descriptors received via SCM_RIGHTS.
+        const SUPPORTED        = RecvFlags::MSG_PEEK.bits
+            | RecvFlags::MSG_TRUNC.bits
+            | RecvFlags::MSG_DONTWAIT.bits
+            | RecvFlags::MSG_CMSG_CLOEXEC.bits;
     }
 }
 

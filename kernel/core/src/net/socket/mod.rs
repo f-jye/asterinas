@@ -68,6 +68,27 @@ mod private {
             }
         }
 
+        /// Performs the I/O operation like [`block_on`], but the operation never waits
+        /// if the user requests the per-call non-blocking behavior via `MSG_DONTWAIT`.
+        #[track_caller]
+        fn block_on_with_flags<F, R>(
+            &self,
+            events: IoEvents,
+            timeout: Option<Duration>,
+            dont_wait: bool,
+            mut try_op: F,
+        ) -> Result<R>
+        where
+            Self: Sized,
+            F: FnMut() -> Result<R>,
+        {
+            if dont_wait {
+                try_op()
+            } else {
+                self.block_on(events, timeout, try_op)
+            }
+        }
+
         /// Handles commands specific to its protocol or socket type.
         fn protocol_ioctl(&self, _raw_ioctl: RawIoctl) -> Result<i32> {
             return_errno_with_message!(Errno::ENOTTY, "the socket ioctl command is unknown");
